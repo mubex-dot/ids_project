@@ -1,0 +1,25 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+ENV/
+env.bak/
+.env
+.envrc
+.DS_Store
+# VSCode
+.vscode/
+# Jupyter
+.ipynb_checkpoints/
+# Data, models, and reports
+data/
+models/
+reports/
+# Ignore logs and temp files
+*.log
+*.tmp
+*.bak
