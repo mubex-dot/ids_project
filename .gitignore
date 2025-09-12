@@ -18,7 +18,6 @@ env.bak/
 # Ignore top-level data, models, and reports only
 /data/interim/*
 /data/processed/*
-/data/raw/*
 /models/*
 /reports/metrics/*
 # Ignore logs and temp files
