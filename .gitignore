@@ -24,3 +24,4 @@ env.bak/
 *.log
 *.tmp
 *.bak
+ids_alerts.jsonl

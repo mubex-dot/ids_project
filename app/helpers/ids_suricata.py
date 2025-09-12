@@ -65,12 +65,21 @@ def suri_state_to_flag(suri_state: str) -> str:
 
 def parse_args():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--model', required=True, help='Path to saved sklearn Pipeline (joblib)')
-    ap.add_argument('--eve', default='/var/log/suricata/eve.json', help='Path to Suricata eve.json')
+    ap.add_argument(
+        '--model',
+        default='models/best_dt.joblib',
+        help='Path to saved sklearn Pipeline (joblib)'
+    )
+    ap.add_argument(
+        '--eve',
+        default='/var/log/suricata/eve.json',
+        help='Path to Suricata eve.json'
+    )
     ap.add_argument('--window', type=float, default=2.0, help='Seconds for count/srv_count window')
     ap.add_argument('--print-cols', action='store_true', help='Print expected model input columns and exit')
     ap.add_argument('--alert-file', default='ids_alerts.jsonl', help='Write alerts to this JSONL file')
     return ap.parse_args()
+
 
 def get_expected_columns(pipeline):
     # Try to introspect the first ColumnTransformer in the pipeline
