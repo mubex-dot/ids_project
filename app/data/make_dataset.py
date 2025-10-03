@@ -12,10 +12,9 @@ INTERIM = Path("data/interim")
 ATTACK_TOKEN = "normal"
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    # drop the difficulty column (not a feature)
     if DIFFICULTY_COL in df.columns:
         df = df.drop(columns=[DIFFICULTY_COL])
-    # lowercase labels
+        
     df[LABEL_COL] = df[LABEL_COL].str.lower()
     return df
 
@@ -35,33 +34,17 @@ def add_targets(df: pd.DataFrame, task: str) -> pd.DataFrame:
     return df
 
 
-def main(task="binary"):
-    # This function can be called programmatically
-    # or via CLI with argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", choices=["binary", "multiclass"], default=task)
-    args, _ = parser.parse_known_args([])
-    # ...existing code for processing dataset...
-    # (You may want to move the rest of the __main__ block here)
-    # For now, just print a placeholder
-    print(f"[make_dataset] Would process dataset for task: {args.task}")
-
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--task", choices=["binary", "multiclass"], default="binary")
-    # args = parser.parse_args()
-    # main(task=args.task)
-    
-
+def main(task):
+    print(f"[make_dataset] Would process dataset for task: {task}")
     ensure_dir(INTERIM)
 
     tr = pd.read_csv(RAW / "KDDTrain+.csv")
     te = pd.read_csv(RAW / "KDDTest+.csv")
 
-    tr = add_targets(clean(tr), args.task)
-    te = add_targets(clean(te), args.task)
+    tr = add_targets(clean(tr), task)
+    te = add_targets(clean(te), task)
 
-    # Save cleaned train/test
     print("Saving cleaned datasets to interim folder")
-    tr.to_csv(INTERIM / f"train_{args.task}.csv", index=False)
-    te.to_csv(INTERIM / f"test_{args.task}.csv", index=False)
-    print("Wrote:", INTERIM / f"train_{args.task}.csv"," and ", INTERIM / f"test_{args.task}.csv")
+    tr.to_csv(INTERIM / f"train_{task}.csv", index=False)
+    te.to_csv(INTERIM / f"test_{task}.csv", index=False)
+    print("Wrote:", INTERIM / f"train_{task}.csv"," and ", INTERIM / f"test_{task}.csv")

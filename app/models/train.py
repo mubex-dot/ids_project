@@ -55,7 +55,7 @@ def grid_search(model_name: str, pre: ColumnTransformer, X, y):
     return gs
 
 
-def main(task="binary", models=["svm", "dt"], fast=False):
+def main(task, models, fast):
     ensure_dir(MODELS)
     df = pd.read_csv(INTERIM / f"train_{task}.csv")
     if fast and len(df) > 40000:
@@ -71,11 +71,3 @@ def main(task="binary", models=["svm", "dt"], fast=False):
         out = MODELS / (f"best_{name}.joblib")
         dump(best, out)
         print("Saved:", out)
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument("--task", choices=["binary", "multiclass"], default="binary")
-#     parser.add_argument("--models", nargs="+", choices=["svm", "dt"], default=["svm", "dt"])
-#     parser.add_argument("--fast", action="store_true", help="Use a subset of training rows (faster SVM)")
-#     args = parser.parse_args()
-#     main(task=args.task, models=args.models, fast=args.fast)

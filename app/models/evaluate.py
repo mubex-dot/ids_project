@@ -32,7 +32,7 @@ def plot_confusion(cm, labels, outpath):
     plt.close(fig)
 
 
-def main(task="binary", model="both"):
+def main(task, model):
     ensure_dir(REPORTS)
     df_te = pd.read_csv(INTERIM / f"test_{task}.csv")
     X_te = df_te.drop(columns=["target"])
@@ -70,10 +70,3 @@ def main(task="binary", model="both"):
             f.write(str(report))
         save_json(metrics, REPORTS / f"metrics_{name}_{task}.json")
         print(f"Saved metrics for {name} →", REPORTS / f"metrics_{name}_{task}.json")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", choices=["binary", "multiclass"], default="binary")
-    parser.add_argument("--model", choices=["svm", "dt", "both"], default="both")
-    args = parser.parse_args()
-    main(task=args.task, model=args.model)
