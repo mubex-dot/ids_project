@@ -1,4 +1,3 @@
-import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -12,9 +11,12 @@ INTERIM = Path("data/interim")
 ATTACK_TOKEN = "normal"
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
+    # Drop difficulty column if present
     if DIFFICULTY_COL in df.columns:
         df = df.drop(columns=[DIFFICULTY_COL])
-        
+    # Drop any columns not in COLUMNS
+    keep_cols = [c for c in COLUMNS if c in df.columns]
+    df = df[keep_cols]
     df[LABEL_COL] = df[LABEL_COL].str.lower()
     return df
 
