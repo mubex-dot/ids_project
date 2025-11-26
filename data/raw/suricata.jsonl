@@ -1,0 +1,6 @@
+{"timestamp":"2025-11-26T11:16:12.827319Z","proto":"tcp","app_proto":"http","tcp_flags":"SF","tx_bytes":123,"rx_bytes":64,"demo_id":"benign-1"}
+{"timestamp":"2025-11-26T11:16:13.032446Z","proto":"tcp","app_proto":"http","tcp_flags":"SF","tx_bytes":164,"rx_bytes":23,"demo_id":"benign-2"}
+{"timestamp":"2025-11-26T11:16:13.233399Z","proto":"tcp","app_proto":"http","tcp_flags":"SF","tx_bytes":229,"rx_bytes":61,"demo_id":"benign-3"}
+{"timestamp":"2025-11-26T11:16:13.484455Z","proto":"tcp","app_proto":"http","tcp_flags":"SF","tx_bytes":244,"rx_bytes":80,"demo_id":"benign-4"}
+{"timestamp":"2025-11-26T11:16:13.688787Z","proto":"tcp","app_proto":"http","tcp_flags":"R","tx_bytes":763148,"rx_bytes":2,"demo_id":"attack-5"}
+{"timestamp":"2025-11-26T11:16:13.892520Z","proto":"tcp","app_proto":"http","tcp_flags":"SF","tx_bytes":173,"rx_bytes":52,"demo_id":"benign-6"}
