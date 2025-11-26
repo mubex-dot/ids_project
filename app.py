@@ -86,7 +86,7 @@ import socket
 app = Flask(__name__)
 
 # Default model path; can be overridden with environment variable
-MODEL_PATH = os.environ.get("IDS_MODEL_PATH", "models/best_svm.joblib")
+MODEL_PATH = os.environ.get("IDS_MODEL_PATH", "models/best_dt.joblib")
 
 # Expected features for the model (drop label/difficulty)
 EXPECTED_FEATURES = [c for c in COLUMNS if c not in (LABEL_COL, DIFFICULTY_COL)]

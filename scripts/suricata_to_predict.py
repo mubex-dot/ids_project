@@ -4,7 +4,7 @@ Read Suricata newline-delimited JSON alerts and send them for prediction.
 
 Usage examples:
   # Call local predict() directly (requires project environment and model file)
-  python scripts/suricata_to_predict.py --input alerts.jsonl --model models/best_svm.joblib
+  python scripts/suricata_to_predict.py --input alerts.jsonl --model models/best_dt.joblib
 
   # POST to a running Flask API
   python scripts/suricata_to_predict.py --input alerts.jsonl --url http://127.0.0.1:5000/predict
