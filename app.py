@@ -54,33 +54,104 @@ def extract_features(alert: dict) -> dict:
         'dst_bytes': dst_bytes,
     }
 def monitor_suricata_log(log_path: str, poll_interval: float = 1.0):
-    """Background thread: tail Suricata JSONL log and submit new events for prediction."""
-    app.logger.info(f"Starting Suricata log monitor: {log_path}")
+    """Robust background tail of a Suricata JSONL file.
+
+    - Waits for the file to appear if it doesn't exist yet.
+    - Detects file truncation/rotation and reopens the file.
+    - Logs debug info; each valid parsed alert is passed to `predict` and broadcast.
+    """
+    logger = app.logger
+    logger.info("Starting Suricata log monitor: %s", log_path)
+    last_inode = None
+    f = None
+    pos = 0
     try:
-        with open(log_path, 'r', encoding='utf-8') as f:
-            f.seek(0, 2)  # Seek to end
-            while True:
-                line = f.readline()
-                if not line:
+        while True:
+            # Ensure file is open
+            if f is None:
+                try:
+                    f = open(log_path, 'r', encoding='utf-8')
+                    st = os.fstat(f.fileno())
+                    last_inode = (st.st_dev, st.st_ino)
+                    # Seek to end so we only process new lines
+                    f.seek(0, 2)
+                    pos = f.tell()
+                    logger.info("Opened log file %s (inode=%s). Seeking to end at %d", log_path, last_inode, pos)
+                except FileNotFoundError:
+                    logger.debug("Log file %s not found; retrying in %.1fs", log_path, poll_interval)
                     time.sleep(poll_interval)
                     continue
-                line = line.strip()
-                if not line:
+                except Exception:
+                    logger.exception("Failed to open log file %s; retrying", log_path)
+                    time.sleep(poll_interval)
                     continue
-                try:
-                    alert = json.loads(line)
-                except Exception as e:
-                    app.logger.warning(f"Invalid JSON in Suricata log: {e}")
+
+            # Check for rotation/truncation
+            try:
+                st = os.stat(log_path)
+                cur_inode = (st.st_dev, st.st_ino)
+                if last_inode and cur_inode != last_inode:
+                    # File was rotated/replaced
+                    logger.info("Log file %s was rotated/replaced (old=%s new=%s); reopening", log_path, last_inode, cur_inode)
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+                    f = None
+                    last_inode = None
                     continue
-                sample = extract_features(alert)
+                # If file was truncated, seek to beginning
+                cur_size = st.st_size
+                if cur_size < pos:
+                    logger.info("Log file %s was truncated (size %d < pos %d); seeking to start", log_path, cur_size, pos)
+                    f.seek(0, 0)
+                    pos = 0
+            except FileNotFoundError:
+                logger.debug("Log file disappeared; closing handle and retrying")
                 try:
-                    res = predict(MODEL_PATH, normalize_sample(sample))
-                    # Broadcast and log as usual
-                    broadcast_alert({"input": sample, "prediction": res, "source": "suricata"})
-                except Exception as e:
-                    app.logger.warning(f"Suricata log prediction failed: {e}")
-    except Exception as e:
-        app.logger.error(f"Suricata log monitor error: {e}")
+                    if f:
+                        f.close()
+                except Exception:
+                    pass
+                f = None
+                last_inode = None
+                time.sleep(poll_interval)
+                continue
+
+            # Read new lines
+            line = f.readline()
+            if not line:
+                time.sleep(poll_interval)
+                # update current position
+                try:
+                    pos = f.tell()
+                except Exception:
+                    pos = pos
+                continue
+            pos = f.tell()
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                alert = json.loads(line)
+            except Exception as e:
+                logger.warning("Invalid JSON in Suricata log: %s", e)
+                continue
+            sample = extract_features(alert)
+            try:
+                res = predict(MODEL_PATH, normalize_sample(sample))
+                broadcast_alert({"input": sample, "prediction": res, "source": "suricata"})
+                logger.debug("Processed alert from log: input=%s prediction=%s", sample, res)
+            except Exception as e:
+                logger.exception("Suricata log prediction failed: %s", e)
+    except Exception:
+        logger.exception("Suricata log monitor loop terminated unexpectedly")
+    finally:
+        try:
+            if f:
+                f.close()
+        except Exception:
+            pass
 import socket
 
 app = Flask(__name__)
@@ -139,7 +210,31 @@ def predict_endpoint():
             try:
                 def _maybe_alert(r):
                     try:
-                        if isinstance(r, dict) and int(r.get("prediction", 0)) == 1:
+                        # Use either model hard prediction or probability score threshold to decide alerts
+                        pred_is_attack = False
+                        try:
+                            pred_is_attack = int(r.get("prediction", 0)) == 1
+                        except Exception:
+                            pred_is_attack = False
+
+                        score = None
+                        try:
+                            if r and isinstance(r, dict):
+                                score = float(r.get("score_attack")) if r.get("score_attack") is not None else None
+                        except Exception:
+                            score = None
+
+                        # Threshold can be tuned via env var IDS_ALERT_THRESHOLD (default 0.5)
+                        try:
+                            threshold = float(os.environ.get("IDS_ALERT_THRESHOLD", "0.5"))
+                        except Exception:
+                            threshold = 0.5
+
+                        is_attack = pred_is_attack or (score is not None and score >= threshold)
+
+                        logging.getLogger(__name__).debug("Alert decision: pred=%s score=%s threshold=%s -> is_attack=%s", pred_is_attack, score, threshold, is_attack)
+
+                        if is_attack:
                             enable = os.environ.get("ENABLE_ALERT_SOUND", "0")
                             if enable.lower() in ("1", "true", "yes"):
                                 sound_path = os.environ.get("IDS_ALERT_SOUND_PATH")
