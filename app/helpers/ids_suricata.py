@@ -72,8 +72,8 @@ def parse_args():
     )
     ap.add_argument(
         '--eve',
-        default='/var/log/suricata/eve.json',
-        help='Path to Suricata eve.json'
+        default='data/raw/ids_alerts.jsonl',
+        help='Path to Suricata eve.json or a project JSONL alert file (default: data/raw/ids_alerts.jsonl)'
     )
     ap.add_argument('--window', type=float, default=2.0, help='Seconds for count/srv_count window')
     ap.add_argument('--print-cols', action='store_true', help='Print expected model input columns and exit')
@@ -96,24 +96,32 @@ def get_expected_columns(pipeline):
     return list(dict.fromkeys(expected))
 
 def tail_f(path):
-    # Like `tail -F`: follow file as it grows; handle rotations by reopening
-    with open(path, 'r') as f:
-        f.seek(0, os.SEEK_END)
-        inode = os.fstat(f.fileno()).st_ino
-        while True:
-            line = f.readline()
-            if line:
-                yield line
-            else:
-                time.sleep(0.2)
+    # Like `tail -F`: follow file as it grows; handle rotations and missing files by reopening
+    while True:
+        try:
+            with open(path, 'r') as f:
+                f.seek(0, os.SEEK_END)
                 try:
-                    if os.stat(path).st_ino != inode:
-                        # rotated
-                        f.close()
-                        f = open(path, 'r')
-                        inode = os.fstat(f.fileno()).st_ino
-                except FileNotFoundError:
-                    time.sleep(0.5)
+                    inode = os.fstat(f.fileno()).st_ino
+                except Exception:
+                    inode = None
+                while True:
+                    line = f.readline()
+                    if line:
+                        yield line
+                    else:
+                        time.sleep(0.2)
+                        try:
+                            if inode is not None and os.stat(path).st_ino != inode:
+                                # rotated: break to reopen
+                                break
+                        except FileNotFoundError:
+                            # file removed/rotated - break and retry
+                            break
+        except FileNotFoundError:
+            # Wait for file to appear
+            time.sleep(0.5)
+            continue
 
 def main():
     args = parse_args()
@@ -141,47 +149,66 @@ def main():
             rec = json.loads(raw)
         except Exception:
             continue
-        if rec.get('event_type') != 'flow':
-            continue
 
-        flow = rec.get('flow', {})
-        src = rec.get('src_ip')
-        dst = rec.get('dest_ip')
-        sp = rec.get('src_port')
-        dp = rec.get('dest_port')
-        proto = rec.get('proto')
-        state = flow.get('state') or (rec.get('tcp', {}) or {}).get('state')
+        # Two supported input formats:
+        # 1) Suricata "flow" events (event_type == 'flow')
+        # 2) Simple JSONL rows already mapped to NSL-KDD-like keys
+        if rec.get('event_type') == 'flow':
+            flow = rec.get('flow', {})
+            src = rec.get('src_ip')
+            dst = rec.get('dest_ip')
+            sp = rec.get('src_port')
+            dp = rec.get('dest_port')
+            proto = rec.get('proto')
+            state = flow.get('state') or (rec.get('tcp', {}) or {}).get('state')
 
-        # timestamps
-        ts_str = rec.get('timestamp')
-        try:
-            ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp() if ts_str else time.time()
-        except Exception:
-            ts = time.time()
-
-        # Compute features
-        protocol_type = proto_to_protocol_type(proto)
-        service = port_to_service(dp) if dp is not None else 'other'
-        flag = suri_state_to_flag(state)
-
-        # Duration
-        # Suricata flow may include "start" and "end"/"age" or "duration"
-        start = flow.get('start')
-        end = flow.get('end')
-        age = flow.get('age')
-        if start and end:
+            # timestamps
+            ts_str = rec.get('timestamp')
             try:
-                t0 = datetime.fromisoformat(start.replace('Z','+00:00')).timestamp()
-                t1 = datetime.fromisoformat(end.replace('Z','+00:00')).timestamp()
-                duration = max(0.0, t1 - t0)
+                ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp() if ts_str else time.time()
             except Exception:
-                duration = float(age) if age is not None else 0.0
-        else:
-            duration = float(age) if age is not None else 0.0
+                ts = time.time()
 
-        # Bytes
-        src_bytes = int(flow.get('bytes_toserver', 0))
-        dst_bytes = int(flow.get('bytes_toclient', 0))
+            # Compute features from flow
+            protocol_type = proto_to_protocol_type(proto)
+            service = port_to_service(dp) if dp is not None else 'other'
+            flag = suri_state_to_flag(state)
+
+            # Duration
+            start = flow.get('start')
+            end = flow.get('end')
+            age = flow.get('age')
+            if start and end:
+                try:
+                    t0 = datetime.fromisoformat(start.replace('Z','+00:00')).timestamp()
+                    t1 = datetime.fromisoformat(end.replace('Z','+00:00')).timestamp()
+                    duration = max(0.0, t1 - t0)
+                except Exception:
+                    duration = float(age) if age is not None else 0.0
+            else:
+                duration = float(age) if age is not None else 0.0
+
+            # Bytes
+            src_bytes = int(flow.get('bytes_toserver', 0))
+            dst_bytes = int(flow.get('bytes_toclient', 0))
+        else:
+            # Treat the record as a pre-mapped alert/sample
+            src = rec.get('src') or rec.get('src_ip')
+            dst = rec.get('dst') or rec.get('dest_ip')
+            sp = rec.get('sp') or rec.get('src_port')
+            dp = rec.get('dp') or rec.get('dest_port')
+            ts_str = rec.get('timestamp') or rec.get('ts')
+            try:
+                ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp() if ts_str else time.time()
+            except Exception:
+                ts = time.time()
+
+            protocol_type = rec.get('protocol_type') or proto_to_protocol_type(rec.get('proto'))
+            service = rec.get('service') or (port_to_service(rec.get('dest_port')) if rec.get('dest_port') else 'other')
+            flag = rec.get('flag') or rec.get('tcp_flags') or 'OTH'
+            duration = float(rec.get('duration', 0.0))
+            src_bytes = int(rec.get('src_bytes', rec.get('tx_bytes', 0)))
+            dst_bytes = int(rec.get('dst_bytes', rec.get('rx_bytes', 0)))
 
         # Sliding-window counts
         win = args.window
