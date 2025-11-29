@@ -1,90 +1,81 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
     <title>IDS Dashboard</title>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
       body {
-        font-family: Arial, sans-serif;
-        background: #f4f4f9;
+        font-family: Arial;
         margin: 0;
-        padding: 0;
+        background: #f4f4f9;
       }
       header {
         background: #222;
         color: #fff;
-        padding: 10px 20px;
+        padding: 14px;
         text-align: center;
-        font-size: 1.5em;
       }
       .container {
-        padding: 10px 20px;
+        padding: 12px;
         max-width: 1200px;
         margin: auto;
+      }
+      #filter {
+        padding: 6px;
+        width: 320px;
+        margin-bottom: 8px;
       }
       table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 10px;
       }
       th,
       td {
-        padding: 8px 12px;
-        border: 1px solid #ccc;
+        padding: 8px;
+        border: 1px solid #ddd;
         text-align: left;
+        font-size: 13px;
       }
       th {
         background: #333;
         color: #fff;
       }
       tr.attack {
-        background: #ffcccc;
+        background: #ffd6d6;
       }
       tr.normal {
-        background: #ccffcc;
+        background: #e9ffe9;
       }
       tr.highlight {
         animation: flash 1s ease;
       }
       @keyframes flash {
         0% {
-          background-color: yellow;
+          background: yellow;
         }
         100% {
-          background-color: inherit;
+          background: inherit;
         }
-      }
-      #filterBox {
-        margin: 10px 0;
-        padding: 6px;
-        width: 100%;
-        max-width: 300px;
       }
     </style>
   </head>
   <body>
-    <header>IDS Real-Time Dashboard</header>
+    <header><h2 style="margin: 0">Live IDS Dashboard</h2></header>
     <div class="container">
-      <input
-        type="text"
-        id="filterBox"
-        placeholder="Filter by IP, Service, or Flag..."
-      />
-      <table id="alertsTable">
+      <input id="filter" placeholder="Filter by IP, service, flag..." />
+      <table id="tbl">
         <thead>
           <tr>
             <th>Time</th>
-            <th>Source</th>
-            <th>Destination</th>
-            <th>Service</th>
+            <th>Src</th>
+            <th>Dst</th>
+            <th>Svc</th>
             <th>Flag</th>
-            <th>Protocol</th>
-            <th>Src Bytes</th>
-            <th>Dst Bytes</th>
-            <th>Count</th>
-            <th>Srv Count</th>
+            <th>Proto</th>
+            <th>Bytes (s/d)</th>
+            <th>Cnt</th>
+            <th>SrvCnt</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -94,50 +85,63 @@
     <audio id="alertSound" src="alert.wav" preload="auto"></audio>
     <script>
       const socket = io();
-      const tableBody = document.querySelector("#alertsTable tbody");
-      const filterBox = document.getElementById("filterBox");
+      const tbody = document.querySelector("#tbl tbody");
+      const filter = document.getElementById("filter");
       const alertSound = document.getElementById("alertSound");
-      const MAX_ALERTS = 50;
+      const MAX = 100;
       let alerts = [];
-      function addAlert(alert) {
-        alerts.unshift(alert);
-        renderTable();
-        if (alert.pred === "ATTACK") alertSound.play();
-      }
-      function renderTable() {
-        const filter = filterBox.value.toLowerCase();
-        tableBody.innerHTML = "";
-        let count = 0;
-        for (let alert of alerts) {
-          if (count >= MAX_ALERTS) break;
-          const match =
-            !filter ||
-            ["src", "dst", "service", "flag"].some((k) =>
-              (alert[k] || "").toLowerCase().includes(filter)
-            );
-          if (match) {
-            const tr = document.createElement("tr");
-            tr.className =
-              alert.pred === "ATTACK" ? "attack highlight" : "normal";
-            tr.innerHTML = `<td>${alert.ts || "-"}</td><td>${
-              alert.src || "-"
-            }</td><td>${alert.dst || "-"}</td>
-            <td>${alert.service || "-"}</td><td>${alert.flag || "-"}</td><td>${
-              alert.protocol_type || "-"
-            }</td>
-            <td>${alert.src_bytes || 0}</td><td>${alert.dst_bytes || 0}</td>
-            <td>${alert.count || 0}</td><td>${alert.srv_count || 0}</td>
-            <td>${alert.pred || "-"}</td>`;
-            tableBody.appendChild(tr);
-            count++;
-          }
+
+      function render() {
+        const f = filter.value.toLowerCase();
+        tbody.innerHTML = "";
+        let shown = 0;
+        for (let a of alerts) {
+          if (shown >= MAX) break;
+          const text = `${a.src || ""} ${a.dst || ""} ${a.service || ""} ${
+            a.flag || ""
+          }`.toLowerCase();
+          if (f && !text.includes(f)) continue;
+          const tr = document.createElement("tr");
+          tr.className = a.pred === "ATTACK" ? "attack highlight" : "normal";
+          tr.innerHTML = `<td>${a.ts || ""}</td>
+      <td>${a.src || ""}</td>
+      <td>${a.dst || ""}</td>
+      <td>${a.service || ""}</td>
+      <td>${a.flag || ""}</td>
+      <td>${a.protocol_type || ""}</td>
+      <td>${a.src_bytes || 0}/${a.dst_bytes || 0}</td>
+      <td>${a.count || 0}</td>
+      <td>${a.srv_count || 0}</td>
+      <td>${a.pred || ""}</td>`;
+          tbody.prepend(tr);
+          shown++;
         }
       }
-      filterBox.addEventListener("input", renderTable);
-      socket.on("alert", addAlert);
+
+      socket.on("connect", () => console.log("connected to server"));
+      socket.on("alert", (a) => {
+        alerts.unshift(a);
+        if (alerts.length > 1000) alerts.pop();
+        if (a.pred === "ATTACK") {
+          try {
+            alertSound.play();
+          } catch (e) {
+            /* autoplay may be blocked */
+          }
+        }
+        render();
+      });
+
+      filter.addEventListener("input", render);
+
+      // initial load of recent alerts (optional)
       fetch("/alerts/download")
-        .then((res) => res.json())
-        .then((data) => data.reverse().forEach(addAlert));
+        .then((r) => r.json())
+        .then((data) => {
+          if (Array.isArray(data))
+            data.reverse().forEach((d) => alerts.unshift(d));
+          render();
+        });
     </script>
   </body>
 </html>
