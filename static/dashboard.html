@@ -1,357 +1,143 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>IDS Live Dashboard</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IDS Dashboard</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
       body {
-        font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+        font-family: Arial, sans-serif;
+        background: #f4f4f9;
         margin: 0;
-        padding: 16px;
-        background: #f7f9fc;
+        padding: 0;
       }
       header {
-        display: flex;
-        align-items: center;
-        gap: 12px;
+        background: #222;
+        color: #fff;
+        padding: 10px 20px;
+        text-align: center;
+        font-size: 1.5em;
       }
-      h1 {
-        margin: 0;
-        font-size: 18px;
+      .container {
+        padding: 10px 20px;
+        max-width: 1200px;
+        margin: auto;
       }
-      #controls {
-        margin-left: auto;
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
       }
-      #alerts {
-        margin-top: 12px;
+      th,
+      td {
+        padding: 8px 12px;
+        border: 1px solid #ccc;
+        text-align: left;
       }
-      .alert {
-        background: white;
-        border-radius: 6px;
-        padding: 10px;
-        margin-bottom: 8px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+      th {
+        background: #333;
+        color: #fff;
       }
-      .attack {
-        border-left: 6px solid #d9534f;
+      tr.attack {
+        background: #ffcccc;
       }
-      .benign {
-        border-left: 6px solid #5cb85c;
+      tr.normal {
+        background: #ccffcc;
       }
-      pre {
-        margin: 0;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono",
-          monospace;
-        font-size: 12px;
+      tr.highlight {
+        animation: flash 1s ease;
       }
-      #status {
-        margin-left: 12px;
-        font-size: 13px;
-        color: #666;
+      @keyframes flash {
+        0% {
+          background-color: yellow;
+        }
+        100% {
+          background-color: inherit;
+        }
+      }
+      #filterBox {
+        margin: 10px 0;
+        padding: 6px;
+        width: 100%;
+        max-width: 300px;
       }
     </style>
   </head>
   <body>
-    <header>
-      <div style="display: flex; align-items: center; gap: 12px">
-        <h1 style="margin: 0; font-size: 20px">IDS Live Dashboard</h1>
-        <div id="status" style="margin-left: 12px; color: #666">
-          Disconnected
-        </div>
-      </div>
-      <div
-        id="controls"
-        style="
-          margin-top: 10px;
-          display: flex;
-          gap: 12px;
-          align-items: center;
-          flex-wrap: wrap;
-        "
-      >
-        <label style="display: flex; align-items: center; gap: 8px"
-          ><input id="enableSound" type="checkbox" /> Play sound on
-          attack</label
-        >
-        <label style="display: flex; align-items: center; gap: 8px"
-          ><input id="enableToast" type="checkbox" /> Desktop
-          notification</label
-        >
-        <label style="display: flex; align-items: center; gap: 8px"
-          ><input id="showOnlyAttacks" type="checkbox" /> Show only
-          attacks</label
-        >
-        <button
-          id="clearList"
-          style="
-            padding: 6px 10px;
-            border-radius: 6px;
-            border: 1px solid #ddd;
-            background: #fff;
-          "
-        >
-          Clear list
-        </button>
-        <button
-          id="downloadLogs"
-          style="
-            padding: 6px 10px;
-            border-radius: 6px;
-            border: 1px solid #286ef0;
-            background: #286ef0;
-            color: white;
-          "
-        >
-          Download logs
-        </button>
-      </div>
-    </header>
-
-    <section
-      style="
-        margin-top: 18px;
-        display: flex;
-        gap: 18px;
-        align-items: flex-start;
-      "
-    >
-      <div style="flex: 1">
-        <div id="summary" style="display: flex; gap: 12px; margin-bottom: 12px">
-          <div
-            style="
-              background: #fff;
-              padding: 10px;
-              border-radius: 8px;
-              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-              min-width: 120px;
-            "
-          >
-            <div style="font-size: 12px; color: #666">Total</div>
-            <div id="totalCount" style="font-weight: 600; font-size: 18px">
-              0
-            </div>
-          </div>
-          <div
-            style="
-              background: #fff;
-              padding: 10px;
-              border-radius: 8px;
-              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-              min-width: 120px;
-            "
-          >
-            <div style="font-size: 12px; color: #666">Attacks</div>
-            <div
-              id="attackCount"
-              style="font-weight: 600; font-size: 18px; color: #d9534f"
-            >
-              0
-            </div>
-          </div>
-          <div
-            style="
-              background: #fff;
-              padding: 10px;
-              border-radius: 8px;
-              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-              min-width: 120px;
-            "
-          >
-            <div style="font-size: 12px; color: #666">Benign</div>
-            <div
-              id="benignCount"
-              style="font-weight: 600; font-size: 18px; color: #5cb85c"
-            >
-              0
-            </div>
-          </div>
-        </div>
-        <div id="alerts" style="max-height: 60vh; overflow: auto"></div>
-      </div>
-      <div style="width: 270px">
-        <div
-          style="
-            background: #fff;
-            padding: 12px;
-            border-radius: 8px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-          "
-        >
-          <h3 style="margin: 0 0 8px 0; font-size: 14px">Live Controls</h3>
-          <div style="font-size: 13px; color: #444">
-            SSE connection: <span id="connState">—</span>
-          </div>
-          <div style="margin-top: 10px; font-size: 13px; color: #666">
-            Hints:
-          </div>
-          <ul style="margin: 6px 0 0 18px; color: #666; font-size: 13px">
-            <li>Toggle sound/notifications</li>
-            <li>Download logs for archival</li>
-            <li>Use the API `/predict` to feed alerts</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <audio id="alertAudio" preload="auto">
-      <source src="/static/alert.wav" type="audio/wav" />
-    </audio>
-
+    <header>IDS Real-Time Dashboard</header>
+    <div class="container">
+      <input
+        type="text"
+        id="filterBox"
+        placeholder="Filter by IP, Service, or Flag..."
+      />
+      <table id="alertsTable">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Source</th>
+            <th>Destination</th>
+            <th>Service</th>
+            <th>Flag</th>
+            <th>Protocol</th>
+            <th>Src Bytes</th>
+            <th>Dst Bytes</th>
+            <th>Count</th>
+            <th>Srv Count</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <audio id="alertSound" src="alert.wav" preload="auto"></audio>
     <script>
-      const statusEl = document.getElementById("status");
-      const connState = document.getElementById("connState");
-      const alertsEl = document.getElementById("alerts");
-      const audio = document.getElementById("alertAudio");
-      const enableSound = document.getElementById("enableSound");
-      const enableToast = document.getElementById("enableToast");
-      const showOnlyAttacks = document.getElementById("showOnlyAttacks");
-      const clearList = document.getElementById("clearList");
-      const downloadLogs = document.getElementById("downloadLogs");
-
-      const totalCount = document.getElementById("totalCount");
-      const attackCount = document.getElementById("attackCount");
-      const benignCount = document.getElementById("benignCount");
-
-      let items = [];
-
-      function renderSummary() {
-        totalCount.textContent = items.length;
-        const attacks = items.filter((i) => isAttack(i)).length;
-        attackCount.textContent = attacks;
-        benignCount.textContent = items.length - attacks;
+      const socket = io();
+      const tableBody = document.querySelector("#alertsTable tbody");
+      const filterBox = document.getElementById("filterBox");
+      const alertSound = document.getElementById("alertSound");
+      const MAX_ALERTS = 50;
+      let alerts = [];
+      function addAlert(alert) {
+        alerts.unshift(alert);
+        renderTable();
+        if (alert.pred === "ATTACK") alertSound.play();
       }
-
-      function isAttack(payload) {
-        return (
-          payload?.prediction?.prediction == 1 ||
-          payload?.prediction?.prediction === "1" ||
-          (payload.prediction && payload.prediction.prediction == 1)
-        );
-      }
-
-      function renderList() {
-        alertsEl.innerHTML = "";
-        const shown = showOnlyAttacks.checked ? items.filter(isAttack) : items;
-        if (shown.length === 0) {
-          alertsEl.innerHTML =
-            '<div style="padding:20px;background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,0.04);color:#666">No alerts yet — waiting for events from the IDS</div>';
-          return;
-        }
-        for (const payload of shown.slice().reverse()) {
-          const attack = isAttack(payload);
-          const div = document.createElement("div");
-          div.className = "alert " + (attack ? "attack" : "benign");
-          div.style.background = "#fff";
-          div.style.borderRadius = "6px";
-          div.style.padding = "10px";
-          div.style.marginBottom = "8px";
-          div.style.boxShadow = "0 1px 2px rgba(0,0,0,0.04)";
-          div.style.borderLeft = attack
-            ? "6px solid #d9534f"
-            : "6px solid #5cb85c";
-          const header = document.createElement("div");
-          header.innerHTML = `<strong>${
-            attack ? "Attack" : "Benign"
-          }</strong> — ${new Date().toLocaleTimeString()}`;
-          const pre = document.createElement("pre");
-          pre.textContent = JSON.stringify(payload, null, 2);
-          pre.style.marginTop = "8px";
-          pre.style.whiteSpace = "pre-wrap";
-          div.appendChild(header);
-          div.appendChild(pre);
-          alertsEl.appendChild(div);
-        }
-      }
-
-      function addAlert(payload) {
-        items.push(payload);
-        // cap in-memory list to 1000
-        if (items.length > 1000) items = items.slice(items.length - 1000);
-        renderSummary();
-        renderList();
-        if (isAttack(payload)) {
-          if (enableSound.checked) {
-            try {
-              audio.currentTime = 0;
-              audio.play().catch(() => {});
-            } catch (e) {}
-          }
-          if (enableToast.checked) {
-            if (Notification.permission === "granted")
-              new Notification("IDS Alert", { body: "Attack detected" });
-            else if (Notification.permission !== "denied")
-              Notification.requestPermission().then((p) => {
-                if (p === "granted")
-                  new Notification("IDS Alert", { body: "Attack detected" });
-              });
+      function renderTable() {
+        const filter = filterBox.value.toLowerCase();
+        tableBody.innerHTML = "";
+        let count = 0;
+        for (let alert of alerts) {
+          if (count >= MAX_ALERTS) break;
+          const match =
+            !filter ||
+            ["src", "dst", "service", "flag"].some((k) =>
+              (alert[k] || "").toLowerCase().includes(filter)
+            );
+          if (match) {
+            const tr = document.createElement("tr");
+            tr.className =
+              alert.pred === "ATTACK" ? "attack highlight" : "normal";
+            tr.innerHTML = `<td>${alert.ts || "-"}</td><td>${
+              alert.src || "-"
+            }</td><td>${alert.dst || "-"}</td>
+            <td>${alert.service || "-"}</td><td>${alert.flag || "-"}</td><td>${
+              alert.protocol_type || "-"
+            }</td>
+            <td>${alert.src_bytes || 0}</td><td>${alert.dst_bytes || 0}</td>
+            <td>${alert.count || 0}</td><td>${alert.srv_count || 0}</td>
+            <td>${alert.pred || "-"}</td>`;
+            tableBody.appendChild(tr);
+            count++;
           }
         }
       }
-
-      function connect() {
-        statusEl.textContent = "Connecting...";
-        connState.textContent = "Connecting";
-        const es = new EventSource("/alerts/stream");
-        es.onopen = () => {
-          statusEl.textContent = "Connected";
-          connState.textContent = "Open";
-        };
-        es.onerror = (e) => {
-          statusEl.textContent = "Disconnected";
-          connState.textContent = "Disconnected";
-          es.close();
-          setTimeout(connect, 2000);
-        };
-        es.onmessage = (ev) => {
-          try {
-            const data = JSON.parse(ev.data);
-            addAlert(data);
-          } catch (e) {
-            console.error("bad event", e);
-          }
-        };
-      }
-
-      clearList.addEventListener("click", () => {
-        items = [];
-        renderSummary();
-        renderList();
-      });
-
-      downloadLogs.addEventListener("click", async () => {
-        try {
-          downloadLogs.disabled = true;
-          const res = await fetch("/alerts/download");
-          if (!res.ok) throw new Error("Download failed");
-          const blob = await res.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `alerts-${new Date()
-            .toISOString()
-            .replace(/[:.]/g, "-")}.json`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(url);
-        } catch (e) {
-          alert("Failed to download logs");
-        } finally {
-          downloadLogs.disabled = false;
-        }
-      });
-
-      // Ask for permission for notifications early
-      if ("Notification" in window) {
-        if (Notification.permission === "default")
-          Notification.requestPermission();
-      }
-
-      // Start
-      renderSummary();
-      renderList();
-      connect();
+      filterBox.addEventListener("input", renderTable);
+      socket.on("alert", addAlert);
+      fetch("/alerts/download")
+        .then((res) => res.json())
+        .then((data) => data.reverse().forEach(addAlert));
     </script>
   </body>
 </html>
