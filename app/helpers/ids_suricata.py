@@ -8,7 +8,14 @@ from collections import deque, defaultdict
 from queue import Queue
 from datetime import datetime, timezone
 import os
+import sys
+
 import joblib
+# Ensure project root is on sys.path so `from app...` imports work when running this script directly
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+from app.models.infer import predict
 import pandas as pd
 
 # Config
@@ -96,51 +103,25 @@ def extract_features(rec, window):
     }
     return sample
 
-def worker(pipeline, expected_cols, window, alert_file):
+def worker(model_path, expected_cols, window, alert_file):
+    # Threshold for alerting (can be tuned via env var)
+    try:
+        thresh = float(os.environ.get("IDS_ALERT_THRESHOLD", 0.5))
+    except Exception:
+        thresh = 0.5
+
     while True:
         rec = _alert_queue.get()
         try:
             sample = extract_features(rec, window)
-            # Ensure DataFrame contains all expected columns the pipeline needs
-            row = {}
-            cols = expected_cols or [
-                "protocol_type", "service", "flag", "duration",
-                "src_bytes", "dst_bytes", "count", "srv_count"
-            ]
-            for c in cols:
-                if c in sample and sample[c] is not None:
-                    row[c] = sample[c]
-                else:
-                    # preserve categorical defaults
-                    if c in ("protocol_type", "service", "flag"):
-                        row[c] = "other"
-                    else:
-                        row[c] = 0
-            df = pd.DataFrame([row])
-            # coerce numeric columns
-            for c in df.columns:
-                try:
-                    if isinstance(row.get(c), (int, float)):
-                        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-                except Exception:
-                    pass
+            # Use centralized predict() which will pad expected columns
+            res = predict(model_path, sample)
+            pred = int(res.get("prediction", 0))
+            score = float(res.get("score_attack", 0.0)) if res.get("score_attack") is not None else 0.0
 
-            try:
-                pred = pipeline.predict(df)[0]
-            except ValueError as e:
-                # Attempt a best-effort fix: add any missing NSL columns and retry once
-                msg = str(e)
-                missing = []
-                if "columns are missing" in msg:
-                    try:
-                        missing = eval(msg.split(':',1)[1].strip())
-                    except Exception:
-                        missing = []
-                for m in missing:
-                    df[m] = 0
-                pred = pipeline.predict(df)[0]
-            if int(pred) == 1:
-                alert = {**sample, "pred": "ATTACK", "ts": sample.get("timestamp") or datetime.now(timezone.utc).isoformat()}
+            is_attack = (pred == 1) or (score >= thresh)
+            if is_attack:
+                alert = {**sample, "pred": "ATTACK", "ts": sample.get("timestamp") or datetime.now(timezone.utc).isoformat(), "score_attack": score}
                 print("[ALERT]", alert)
                 _recent_alerts.appendleft(alert)
                 with open(alert_file, "a", buffering=1) as fh:
