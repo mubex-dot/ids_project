@@ -156,8 +156,24 @@ def ids_worker(pipeline):
         try:
             sample = extract_features(alert)
             norm = normalize_sample(sample)
-            pred = predict(MODEL_PATH, norm)
-            is_attack = int(pred.get("prediction", 0)) == 1
+            res = predict(MODEL_PATH, norm)
+            # res contains: prediction (int), score_attack (float|None), model_has_proba (bool)
+            pred_val = int(res.get("prediction", 0))
+            score = res.get("score_attack")
+            try:
+                thresh = float(os.environ.get("IDS_ALERT_THRESHOLD", 0.5))
+            except Exception:
+                thresh = 0.5
+            allow_pred_no_proba = os.environ.get("IDS_ALLOW_PRED_NO_PROBA", "0").lower() in ("1", "true", "yes")
+
+            if score is not None:
+                is_attack = float(score) >= thresh
+            else:
+                # if model doesn't expose probability, only treat as attack when allowed
+                is_attack = (pred_val == 1) and allow_pred_no_proba
+
+            if os.environ.get("IDS_DEBUG") in ("1", "true", "yes"):
+                app.logger.debug("predict result=%s thresh=%s allow_pred_no_proba=%s is_attack=%s", res, thresh, allow_pred_no_proba, is_attack)
 
             if is_attack:
                 record = {
@@ -177,7 +193,7 @@ def ids_worker(pipeline):
                 # Broadcast & optional alerts
                 broadcast_alert(record)
                 sound_path = os.environ.get("IDS_ALERT_SOUND_PATH")
-                if os.environ.get("ENABLE_ALERT_SOUND", "0").lower() in ("1", "true", "yes"):
+                if os.environ.get("ENABLE_ALERT_SOUND", "1").lower() in ("1", "true", "yes"):
                     play_alert(sound_path)
 
                 if plyer_notification:
