@@ -128,6 +128,22 @@ def worker(model, expected_cols, window, alert_file):
                     is_attack = False
             else:
                 is_attack = (pred == 1) and allow_pred_no_proba
+            # Audit log prediction
+            try:
+                logs_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(logs_dir, exist_ok=True)
+                with open(os.path.join(logs_dir, 'predictions.log'), 'a', encoding='utf-8') as pl:
+                    pl.write(json.dumps({
+                        'ts': datetime.now(timezone.utc).isoformat(),
+                        'sample': sample,
+                        'predict_result': res,
+                        'threshold': thresh,
+                        'allow_pred_no_proba': allow_pred_no_proba,
+                        'is_attack': is_attack
+                    }) + "\n")
+            except Exception:
+                import traceback; traceback.print_exc()
+
             if is_attack:
                 alert = {**sample, "pred": "ATTACK", "ts": sample.get("timestamp") or datetime.now(timezone.utc).isoformat(), "score_attack": score}
                 print("[ALERT]", alert)

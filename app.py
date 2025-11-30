@@ -175,6 +175,23 @@ def ids_worker(pipeline):
             if os.environ.get("IDS_DEBUG") in ("1", "true", "yes"):
                 app.logger.debug("predict result=%s thresh=%s allow_pred_no_proba=%s is_attack=%s", res, thresh, allow_pred_no_proba, is_attack)
 
+            # Log every prediction to a JSONL file for auditing
+            try:
+                log_dir = os.path.join(os.getcwd(), 'logs')
+                os.makedirs(log_dir, exist_ok=True)
+                log_path = os.path.join(log_dir, 'predictions.log')
+                with open(log_path, 'a', encoding='utf-8') as lf:
+                    lf.write(json.dumps({
+                        'ts': datetime.now(timezone.utc).isoformat(),
+                        'sample': sample,
+                        'predict_result': res,
+                        'threshold': thresh,
+                        'allow_pred_no_proba': allow_pred_no_proba,
+                        'is_attack': is_attack
+                    }) + "\n")
+            except Exception:
+                app.logger.exception('Failed to write prediction log')
+
             if is_attack:
                 record = {
                     "ts": sample["timestamp"] or datetime.now(timezone.utc).isoformat(),
