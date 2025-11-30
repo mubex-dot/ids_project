@@ -3,8 +3,16 @@ import time
 import threading
 import pandas as pd
 from queue import Queue
+import os
+import sys
+
+# Ensure project root is on sys.path so `from app...` imports work when running this
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from app.models.infer import predict
-from app.features.columns_nsl_kdd import EXPECTED_FEATURES  
+from app.features.columns_nsl_kdd import EXPECTED_FEATURES
 
 def extract_features(alert: dict) -> dict:
     """Extract only the needed features for the model."""

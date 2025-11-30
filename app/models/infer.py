@@ -2,6 +2,14 @@ from joblib import load
 import pandas as pd
 import os
 import logging
+from typing import List
+try:
+    # local feature definitions
+    from app.features.columns_nsl_kdd import COLUMNS as NSL_COLUMNS, CATEGORICAL as NSL_CATEGORICAL
+except Exception:
+    # fallback if package import not available (script run directly)
+    NSL_COLUMNS = []
+    NSL_CATEGORICAL = ['protocol_type', 'service', 'flag']
 
 
 def predict(model_path, sample_dict):
@@ -16,10 +24,42 @@ def predict(model_path, sample_dict):
     clf = load(model_path)
 
     # Ensure required categorical keys exist; missing numerics default to 0
-    for k in ["protocol_type", "service", "flag"]:
+    for k in NSL_CATEGORICAL:
         sample_dict.setdefault(k, "unknown")
 
-    df = pd.DataFrame([sample_dict])
+    # Try to infer expected input columns from the pipeline
+    expected_cols: List[str] = []
+    try:
+        if hasattr(clf, 'named_steps'):
+            for name, step in clf.named_steps.items():
+                # ColumnTransformer stores transformers_ with (name, transformer, columns)
+                if hasattr(step, 'transformers_'):
+                    for _, _, cols in step.transformers_:
+                        if isinstance(cols, (list, tuple)):
+                            expected_cols.extend(cols)
+                    break
+    except Exception:
+        expected_cols = []
+
+    # Fallback to known NSL columns if pipeline introspection failed
+    if not expected_cols:
+        expected_cols = NSL_COLUMNS or ['protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes']
+
+    # Build a sanitized row containing all expected columns with safe defaults
+    row = {}
+    for c in expected_cols:
+        if c in sample_dict:
+            row[c] = sample_dict[c]
+        else:
+            # categorical defaults
+            if c in NSL_CATEGORICAL:
+                row[c] = 'other'
+            else:
+                # numeric default
+                row[c] = 0
+
+    df = pd.DataFrame([row])
+    # Ensure numeric columns have numeric dtype and NaNs filled
     for c in df.columns:
         if df[c].dtype.kind in "biufc":
             df[c] = df[c].fillna(0)
@@ -43,7 +83,23 @@ def predict(model_path, sample_dict):
     except Exception:
         logger.exception("Failed while logging debug info")
 
-    y = int(clf.predict(df)[0])
+    try:
+        y = int(clf.predict(df)[0])
+    except ValueError as e:
+        # If columns are still missing, attempt to add NSL_COLUMNS defaults and retry once
+        missing_msg = str(e)
+        logger.error("Prediction failed due to columns: %s", missing_msg)
+        if NSL_COLUMNS:
+            for c in NSL_COLUMNS:
+                if c not in df.columns:
+                    df[c] = 0
+            try:
+                y = int(clf.predict(df)[0])
+            except Exception:
+                logger.exception("Prediction retry failed")
+                raise
+        else:
+            raise
     out = {"prediction": y}
     if hasattr(clf, "predict_proba"):
         try:
