@@ -103,23 +103,31 @@ def extract_features(rec, window):
     }
     return sample
 
-def worker(model_path, expected_cols, window, alert_file):
+def worker(model, expected_cols, window, alert_file):
     # Threshold for alerting (can be tuned via env var)
     try:
         thresh = float(os.environ.get("IDS_ALERT_THRESHOLD", 0.5))
     except Exception:
         thresh = 0.5
+    allow_pred_no_proba = os.environ.get("IDS_ALLOW_PRED_NO_PROBA", "0").lower() in ("1", "true", "yes")
 
     while True:
         rec = _alert_queue.get()
         try:
             sample = extract_features(rec, window)
-            # Use centralized predict() which will pad expected columns
-            res = predict(model_path, sample)
+            # Use centralized predict() which accepts either a model path or a loaded estimator
+            res = predict(model, sample)
             pred = int(res.get("prediction", 0))
-            score = float(res.get("score_attack", 0.0)) if res.get("score_attack") is not None else 0.0
+            score = res.get("score_attack")
 
-            is_attack = (pred == 1) or (score >= thresh)
+            # Prefer probability when available; otherwise require explicit opt-in for pred-only alerts
+            if score is not None:
+                try:
+                    is_attack = float(score) >= thresh
+                except Exception:
+                    is_attack = False
+            else:
+                is_attack = (pred == 1) and allow_pred_no_proba
             if is_attack:
                 alert = {**sample, "pred": "ATTACK", "ts": sample.get("timestamp") or datetime.now(timezone.utc).isoformat(), "score_attack": score}
                 print("[ALERT]", alert)

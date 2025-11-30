@@ -21,7 +21,22 @@ def predict(model_path, sample_dict):
     - When `IDS_DEBUG=1` is set in the environment, logs the input DataFrame and model info.
     """
     logger = logging.getLogger(__name__)
-    clf = load(model_path)
+    # model_path may be a path (str/PathLike) or an already-loaded estimator/Pipeline.
+    clf = None
+    try:
+        import os as _os
+        if isinstance(model_path, (str, bytes, _os.PathLike)):
+            clf = load(model_path)
+        else:
+            # assume it's an estimator/Pipeline already
+            clf = model_path
+    except Exception:
+        # fallback: try to load directly
+        try:
+            clf = load(model_path)
+        except Exception:
+            logger.exception("Failed to load model from %s", model_path)
+            raise
 
     # Ensure required categorical keys exist; missing numerics default to 0
     for k in NSL_CATEGORICAL:
