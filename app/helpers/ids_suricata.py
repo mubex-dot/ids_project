@@ -101,8 +101,44 @@ def worker(pipeline, expected_cols, window, alert_file):
         rec = _alert_queue.get()
         try:
             sample = extract_features(rec, window)
-            df = pd.DataFrame([sample])
-            pred = pipeline.predict(df)[0]
+            # Ensure DataFrame contains all expected columns the pipeline needs
+            row = {}
+            cols = expected_cols or [
+                "protocol_type", "service", "flag", "duration",
+                "src_bytes", "dst_bytes", "count", "srv_count"
+            ]
+            for c in cols:
+                if c in sample and sample[c] is not None:
+                    row[c] = sample[c]
+                else:
+                    # preserve categorical defaults
+                    if c in ("protocol_type", "service", "flag"):
+                        row[c] = "other"
+                    else:
+                        row[c] = 0
+            df = pd.DataFrame([row])
+            # coerce numeric columns
+            for c in df.columns:
+                try:
+                    if isinstance(row.get(c), (int, float)):
+                        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+                except Exception:
+                    pass
+
+            try:
+                pred = pipeline.predict(df)[0]
+            except ValueError as e:
+                # Attempt a best-effort fix: add any missing NSL columns and retry once
+                msg = str(e)
+                missing = []
+                if "columns are missing" in msg:
+                    try:
+                        missing = eval(msg.split(':',1)[1].strip())
+                    except Exception:
+                        missing = []
+                for m in missing:
+                    df[m] = 0
+                pred = pipeline.predict(df)[0]
             if int(pred) == 1:
                 alert = {**sample, "pred": "ATTACK", "ts": sample.get("timestamp") or datetime.now(timezone.utc).isoformat()}
                 print("[ALERT]", alert)

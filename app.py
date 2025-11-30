@@ -57,13 +57,15 @@ def extract_features(alert: dict) -> dict:
     """Map Suricata alert/flow JSON to NSL-KDD features."""
     def find(*keys, default=None):
         for k in keys:
-            if k in alert:
+            # only test string keys against the alert dict
+            if isinstance(k, str) and k in alert:
                 return alert[k]
         return default
-
-    proto = find("proto") or find("flow", {}).get("proto") or "unknown"
+    # prefer top-level proto, else flow.proto if present
+    flow = find("flow", default={}) or {}
+    proto = find("proto") or flow.get("proto") or "unknown"
     service = find("app_proto") or find("service") or "other"
-    flag = find("tcp_flags") or find("flow", {}).get("tcp_flags") or "OTH"
+    flag = find("tcp_flags") or flow.get("tcp_flags") or "OTH"
     src_bytes = int(find("tx_bytes") or find("src_bytes") or 0)
     dst_bytes = int(find("rx_bytes") or find("dst_bytes") or 0)
     duration = float(find("duration") or 0.0)
