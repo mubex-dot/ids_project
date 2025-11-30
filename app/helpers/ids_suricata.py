@@ -1,53 +1,172 @@
+
+
+import argparse
 import json
 import time
 import threading
-import pandas as pd
+from collections import deque, defaultdict
 from queue import Queue
+from datetime import datetime, timezone
 import os
-import sys
+import joblib
+import pandas as pd
 
-# Ensure project root is on sys.path so `from app...` imports work when running this
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Config
+DEFAULT_MODEL = "models/best_dt.joblib"
+DEFAULT_EVE = "/var/log/suricata/eve.json"
+DEFAULT_ALERT_FILE = "ids_alerts.jsonl"
+NUM_WORKERS = 4
+SLIDING_WINDOW = 2.0
 
-from app.models.infer import predict
-from app.features.columns_nsl_kdd import EXPECTED_FEATURES
+# Sliding windows (module-level so workers share)
+_by_host = defaultdict(deque)
+_by_host_service = defaultdict(deque)
+_alert_queue = Queue()
+_recent_alerts = deque(maxlen=500)
 
-def extract_features(alert: dict) -> dict:
-    """Extract only the needed features for the model."""
-    return {
-        "protocol_type": alert.get("proto", "unknown"),
-        "service": alert.get("app_proto", "unknown"),
-        "flag": alert.get("tcp_flags", "OTH"),
-        "src_bytes": alert.get("tx_bytes", 0),
-        "dst_bytes": alert.get("rx_bytes", 0),
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--eve", default=DEFAULT_EVE)
+    ap.add_argument("--alert-file", default=DEFAULT_ALERT_FILE)
+    ap.add_argument("--threads", type=int, default=NUM_WORKERS)
+    ap.add_argument("--window", type=float, default=SLIDING_WINDOW)
+    return ap.parse_args()
+
+def safe_get(d, *keys, default=None):
+    for k in keys:
+        if isinstance(k, str) and k in d:
+            return d[k]
+    return default
+
+def extract_features(rec, window):
+    ts_str = safe_get(rec, "timestamp", "ts")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp() if ts_str else time.time()
+    except Exception:
+        ts = time.time()
+
+    src_ip = safe_get(rec, "src_ip", "src")
+    dst_ip = safe_get(rec, "dest_ip", "dst") or "unknown"
+    src_port = safe_get(rec, "src_port", "sp")
+    dst_port = safe_get(rec, "dest_port", "dp")
+
+    protocol = safe_get(rec, "proto", "protocol") or (rec.get("flow") or {}).get("proto") or "other"
+    service = safe_get(rec, "app_proto", "service") or (rec.get("flow") or {}).get("service") or "other"
+    flag = safe_get(rec, "tcp_flags", "flags") or (rec.get("flow") or {}).get("tcp_flags") or "OTH"
+
+    src_bytes = safe_get(rec, "tx_bytes", "src_bytes") or (rec.get("flow") or {}).get("bytes_toserver", 0)
+    dst_bytes = safe_get(rec, "rx_bytes", "dst_bytes") or (rec.get("flow") or {}).get("bytes_toclient", 0)
+    try: src_bytes = int(src_bytes)
+    except: src_bytes = 0
+    try: dst_bytes = int(dst_bytes)
+    except: dst_bytes = 0
+
+    duration = safe_get(rec, "duration") or (rec.get("flow") or {}).get("age", 0.0)
+    try: duration = float(duration)
+    except: duration = 0.0
+
+    # sliding window counts
+    dq = _by_host[dst_ip]
+    dq.append(ts)
+    while dq and ts - dq[0] > window:
+        dq.popleft()
+    count = len(dq)
+
+    dq2 = _by_host_service[(dst_ip, service)]
+    dq2.append(ts)
+    while dq2 and ts - dq2[0] > window:
+        dq2.popleft()
+    srv_count = len(dq2)
+
+    sample = {
+        "protocol_type": str(protocol).lower(),
+        "service": str(service),
+        "flag": str(flag),
+        "duration": duration,
+        "src_bytes": src_bytes,
+        "dst_bytes": dst_bytes,
+        "count": count,
+        "srv_count": srv_count,
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "src_port": src_port,
+        "dst_port": dst_port,
+        "timestamp": ts_str
     }
+    return sample
 
-def normalize_sample(sample: dict) -> dict:
-    norm = {}
-    for f in EXPECTED_FEATURES:
-        norm[f] = sample.get(f, "unknown")
-    return norm
+def worker(pipeline, expected_cols, window, alert_file):
+    while True:
+        rec = _alert_queue.get()
+        try:
+            sample = extract_features(rec, window)
+            df = pd.DataFrame([sample])
+            pred = pipeline.predict(df)[0]
+            if int(pred) == 1:
+                alert = {**sample, "pred": "ATTACK", "ts": sample.get("timestamp") or datetime.now(timezone.utc).isoformat()}
+                print("[ALERT]", alert)
+                _recent_alerts.appendleft(alert)
+                with open(alert_file, "a", buffering=1) as fh:
+                    fh.write(json.dumps(alert) + "\n")
+        except Exception:
+            import traceback; traceback.print_exc()
+        finally:
+            _alert_queue.task_done()
 
-def worker(log_path: str, model_path: str, queue: Queue):
-    with open(log_path, 'r', encoding='utf-8') as f:
-        f.seek(0, 2)
-        while True:
-            line = f.readline()
-            if not line:
-                time.sleep(1)
-                continue
-            try:
-                alert = json.loads(line.strip())
-                sample = extract_features(alert)
-                norm = normalize_sample(sample)
-                res = predict(model_path, norm)
-                queue.put({"sample": norm, "prediction": res})
-            except Exception:
-                continue
+def tail_f(path):
+    while True:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                f.seek(0, 2)
+                try: inode = os.fstat(f.fileno()).st_ino
+                except: inode = None
+                while True:
+                    line = f.readline()
+                    if line:
+                        yield line
+                    else:
+                        time.sleep(0.1)
+                        try:
+                            if inode and os.stat(path).st_ino != inode:
+                                break
+                        except FileNotFoundError:
+                            break
+        except FileNotFoundError:
+            time.sleep(0.5)
 
-def start_suricata_monitor(log_path: str, model_path: str):
-    q = Queue()
-    threading.Thread(target=worker, args=(log_path, model_path, q), daemon=True).start()
-    return q
+def monitor(eve_path):
+    for line in tail_f(eve_path):
+        try:
+            rec = json.loads(line)
+        except:
+            continue
+        _alert_queue.put(rec)
+
+def main():
+    args = parse_args()
+    pipeline = joblib.load(args.model)
+    # best-effort extract expected_cols from pipeline (if ColumnTransformer present)
+    expected_cols = None
+    try:
+        for name, step in pipeline.named_steps.items():
+            if hasattr(step, "transformers_"):
+                cols = []
+                for _, _, c in step.transformers_:
+                    if isinstance(c, (list, tuple)):
+                        cols.extend(c)
+                expected_cols = cols
+                break
+    except Exception:
+        expected_cols = ["protocol_type","service","flag","duration","src_bytes","dst_bytes","count","srv_count"]
+
+    # start workers
+    for _ in range(args.threads):
+        t = threading.Thread(target=worker, args=(pipeline, expected_cols, args.window, args.alert_file), daemon=True)
+        t.start()
+
+    print(f"[+] Monitoring {args.eve} (window={args.window}s) - press Ctrl+C to stop")
+    monitor(args.eve)
+
+if __name__ == "__main__":
+    main()
