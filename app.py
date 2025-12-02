@@ -57,11 +57,10 @@ def extract_features(alert: dict) -> dict:
     """Map Suricata alert/flow JSON to NSL-KDD features."""
     def find(*keys, default=None):
         for k in keys:
-            # only test string keys against the alert dict
             if isinstance(k, str) and k in alert:
                 return alert[k]
         return default
-    # prefer top-level proto, else flow.proto if present
+    
     flow = find("flow", default={}) or {}
     proto = find("proto") or flow.get("proto") or "unknown"
     service = find("app_proto") or find("service") or "other"
@@ -93,22 +92,61 @@ def extract_features(alert: dict) -> dict:
         dq_srv.popleft()
     srv_count = len(dq_srv)
 
+    # Return ALL 35 NSL-KDD features (NOT including "label"!)
     return {
-        "protocol_type": proto,
-        "service": service,
-        "flag": flag,
+        # Basic features (from Suricata)
         "duration": duration,
+        "protocol_type": str(proto).lower(),
+        "service": str(service),
+        "flag": str(flag),
         "src_bytes": src_bytes,
         "dst_bytes": dst_bytes,
+        
+        # Traffic intensity features
         "count": count,
         "srv_count": srv_count,
+        
+        # Content features (default to 0)
+        "wrong_fragment": 0,
+        "urgent": 0,
+        "hot": 0,
+        "num_failed_logins": 0,
+        "logged_in": 1 if service not in ["other", "unknown"] else 0,
+        "num_compromised": 0,
+        "root_shell": 0,
+        "su_attempted": 0,
+        "num_root": 0,
+        "is_guest_login": 0,
+        
+        # Traffic rate features
+        "serror_rate": 0,
+        "srv_serror_rate": 0,
+        "rerror_rate": 0,
+        "srv_rerror_rate": 0,
+        "same_srv_rate": 0,
+        "diff_srv_rate": 0,
+        "srv_diff_host_rate": 0,
+        
+        # Destination host features
+        "dst_host_count": count,
+        "dst_host_srv_count": srv_count,
+        "dst_host_same_srv_rate": 0,
+        "dst_host_diff_srv_rate": 0,
+        "dst_host_same_src_port_rate": 0,
+        "dst_host_srv_diff_host_rate": 0,
+        "dst_host_serror_rate": 0,
+        "dst_host_srv_serror_rate": 0,
+        "dst_host_rerror_rate": 0,
+        "dst_host_srv_rerror_rate": 0,
+        
+        # Additional fields for dashboard
         "dst_ip": dst_ip,
         "src_ip": alert.get("src_ip") or alert.get("src") or "unknown",
         "src_port": alert.get("src_port") or alert.get("sp"),
         "dst_port": alert.get("dest_port") or alert.get("dp"),
         "timestamp": alert.get("timestamp")
     }
-
+    
 
 def play_alert(sound_path: Optional[str] = None):
     def _play():
@@ -321,6 +359,9 @@ def download_alerts():
         logging.exception("Failed to prepare alerts download")
         return jsonify({"error": "Failed to prepare alerts download"}), 500
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('static', filename)
 
 # -------------------- MAIN --------------------
 if __name__ == "__main__":

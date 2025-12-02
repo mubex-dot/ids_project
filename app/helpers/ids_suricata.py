@@ -86,15 +86,54 @@ def extract_features(rec, window):
         dq2.popleft()
     srv_count = len(dq2)
 
+    # Return ALL 35 NSL-KDD features (NOT including "label"!)
     sample = {
+        # Basic features (from Suricata)
+        "duration": duration,
         "protocol_type": str(protocol).lower(),
         "service": str(service),
         "flag": str(flag),
-        "duration": duration,
         "src_bytes": src_bytes,
         "dst_bytes": dst_bytes,
+        
+        # Traffic intensity features
         "count": count,
         "srv_count": srv_count,
+        
+        # Content features (default to 0 - not in Suricata)
+        "wrong_fragment": 0,
+        "urgent": 0,
+        "hot": 0,
+        "num_failed_logins": 0,
+        "logged_in": 1 if service not in ["other", "unknown"] else 0,
+        "num_compromised": 0,
+        "root_shell": 0,
+        "su_attempted": 0,
+        "num_root": 0,
+        "is_guest_login": 0,
+        
+        # Traffic rate features
+        "serror_rate": 0,
+        "srv_serror_rate": 0,
+        "rerror_rate": 0,
+        "srv_rerror_rate": 0,
+        "same_srv_rate": 0,
+        "diff_srv_rate": 0,
+        "srv_diff_host_rate": 0,
+        
+        # Destination host features
+        "dst_host_count": count,
+        "dst_host_srv_count": srv_count,
+        "dst_host_same_srv_rate": 0,
+        "dst_host_diff_srv_rate": 0,
+        "dst_host_same_src_port_rate": 0,
+        "dst_host_srv_diff_host_rate": 0,
+        "dst_host_serror_rate": 0,
+        "dst_host_srv_serror_rate": 0,
+        "dst_host_rerror_rate": 0,
+        "dst_host_srv_rerror_rate": 0,
+        
+        # Additional fields for dashboard (NOT part of the 35 features)
         "src_ip": src_ip,
         "dst_ip": dst_ip,
         "src_port": src_port,
@@ -207,6 +246,7 @@ def main():
         t.start()
 
     print(f"[+] Monitoring {args.eve} (window={args.window}s) - press Ctrl+C to stop")
+    print("[i] Start Suricata with: sudo suricata -i <iface> -l /var/log/suricata -D")
     monitor(args.eve)
 
 if __name__ == "__main__":
