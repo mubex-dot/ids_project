@@ -272,23 +272,21 @@ def ids_worker(pipeline):
                 sample["dst_bytes"] < 100 and 
                 sample["duration"] == 0.0 and
                 sample["count"] < 3):
-                _alert_queue.task_done()
                 continue  # Skip heartbeat/control packets
             
             # FILTER 2: Skip DNS queries (usually benign)
             if (sample["service"] == "domain_u" and 
                 sample["dst_bytes"] < 500 and 
                 sample["duration"] < 0.5):
-                _alert_queue.task_done()
-                continue
+                continue  # Skip benign DNS
             
             # FILTER 3: Skip very low connection counts (noise)
             if sample["count"] < 2 and sample["srv_count"] < 2:
-                _alert_queue.task_done()
-                continue
+                continue  # Skip noise
             # ==============================
             
             res = predict(MODEL_PATH, norm)
+            # res contains: prediction (int), score_attack (float|None), model_has_proba (bool)
             pred_val = int(res.get("prediction", 0))
             score = res.get("score_attack")
             try:
@@ -368,8 +366,7 @@ def ids_worker(pipeline):
         except Exception:
             logging.exception("IDS worker error")
         finally:
-            _alert_queue.task_done()
-
+            _alert_queue.task_done()  # ONLY HERE, not in filters!
 
 # -------------------- SURICATA MONITOR --------------------
 def tail_f(path: str):

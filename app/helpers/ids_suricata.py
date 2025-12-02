@@ -210,6 +210,7 @@ def extract_features(rec, window):
     return sample
 
 
+
 def worker(model, expected_cols, window, alert_file):
     # Threshold for alerting (can be tuned via env var)
     try:
@@ -229,20 +230,17 @@ def worker(model, expected_cols, window, alert_file):
                 sample["dst_bytes"] < 100 and 
                 sample["duration"] == 0.0 and
                 sample["count"] < 3):
-                _alert_queue.task_done()
-                continue  # Skip heartbeat/control packets
+                continue  # Skip heartbeat/control packets (NO task_done here!)
             
             # FILTER 2: Skip DNS queries (usually benign)
             if (sample["service"] == "domain_u" and 
                 sample["dst_bytes"] < 500 and 
                 sample["duration"] < 0.5):
-                _alert_queue.task_done()
-                continue
+                continue  # Skip benign DNS (NO task_done here!)
             
             # FILTER 3: Skip very low connection counts (noise)
             if sample["count"] < 2 and sample["srv_count"] < 2:
-                _alert_queue.task_done()
-                continue
+                continue  # Skip noise (NO task_done here!)
             # ==============================
             
             # Use centralized predict() which accepts either a model path or a loaded estimator
@@ -268,6 +266,7 @@ def worker(model, expected_cols, window, alert_file):
                 # if model doesn't expose probability, only treat as attack when allowed
                 is_attack = (pred == 1) and allow_pred_no_proba
             # ======================================
+            
             # Audit log prediction
             try:
                 logs_dir = os.path.join(os.getcwd(), 'logs')
@@ -293,7 +292,8 @@ def worker(model, expected_cols, window, alert_file):
         except Exception:
             import traceback; traceback.print_exc()
         finally:
-            _alert_queue.task_done()
+            _alert_queue.task_done()  # ONLY HERE, not in the filters!
+
 
 def tail_f(path):
     while True:
