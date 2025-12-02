@@ -9,6 +9,7 @@ from queue import Queue
 from datetime import datetime, timezone
 import os
 import sys
+import random
 
 import joblib
 # Ensure project root is on sys.path so `from app...` imports work when running this script directly
@@ -46,6 +47,7 @@ def safe_get(d, *keys, default=None):
             return d[k]
     return default
 
+
 def extract_features(rec, window):
     ts_str = safe_get(rec, "timestamp", "ts")
     try:
@@ -58,20 +60,81 @@ def extract_features(rec, window):
     src_port = safe_get(rec, "src_port", "sp")
     dst_port = safe_get(rec, "dest_port", "dp")
 
-    protocol = safe_get(rec, "proto", "protocol") or (rec.get("flow") or {}).get("proto") or "other"
-    service = safe_get(rec, "app_proto", "service") or (rec.get("flow") or {}).get("service") or "other"
-    flag = safe_get(rec, "tcp_flags", "flags") or (rec.get("flow") or {}).get("tcp_flags") or "OTH"
-
+    # BETTER DEFAULT VALUES FOR CATEGORICAL FEATURES
+    # Model was trained on specific values, not "other"
+    
+    # Protocol: Map to "tcp", "udp", or "icmp" only
+    raw_proto = safe_get(rec, "proto", "protocol") or (rec.get("flow") or {}).get("proto") or ""
+    protocol = "tcp"  # Default to most common
+    proto_lower = raw_proto.lower()
+    if proto_lower in ["tcp", "udp", "icmp"]:
+        protocol = proto_lower
+    
+    # Service: Map to common NSL-KDD services
+    raw_service = safe_get(rec, "app_proto", "service") or (rec.get("flow") or {}).get("service") or ""
+    service = "http"  # Default to most common
+    
+    # Map Suricata services to NSL-KDD
+    service_map = {
+        "http": "http", "https": "http", "dns": "domain_u", "ftp": "ftp_data",
+        "ssh": "ssh", "smtp": "smtp", "tls": "ssl", "ssl": "ssl",
+        "dhcp": "dhcp", "snmp": "snmp", "telnet": "telnet"
+    }
+    
+    if raw_service in service_map:
+        service = service_map[raw_service]
+    elif raw_service and "data" in raw_service.lower():
+        service = "ftp_data"  # Generic data service
+    else:
+        # Guess by port if service unknown
+        port_service_map = {
+            53: "domain_u", 21: "ftp_data", 22: "ssh", 25: "smtp",
+            80: "http", 443: "ssl", 8080: "http", 23: "telnet"
+        }
+        try:
+            dst_port_int = int(dst_port) if dst_port else 0
+            if dst_port_int in port_service_map:
+                service = port_service_map[dst_port_int]
+        except:
+            pass
+    
+    # Flag: Better TCP flag mapping
+    raw_flags = safe_get(rec, "tcp_flags", "flags") or (rec.get("flow") or {}).get("tcp_flags") or ""
+    flag = "SF"  # Default to established connection (normal)
+    
+    if protocol == "tcp" and raw_flags:
+        flag_map = {
+            "S": "S0",      # SYN (connection attempt)
+            "SA": "SF",     # SYN-ACK (established)
+            "A": "SF",      # ACK (data transfer)
+            "FA": "RSTO",   # FIN-ACK (closing)
+            "RA": "RSTR",   # RST-ACK (reset)
+            "PA": "SH",     # PSH-ACK (urgent data)
+        }
+        flag = flag_map.get(raw_flags, "SF")
+    
+    # Bytes: Add small random noise to avoid exact zeros
     src_bytes = safe_get(rec, "tx_bytes", "src_bytes") or (rec.get("flow") or {}).get("bytes_toserver", 0)
     dst_bytes = safe_get(rec, "rx_bytes", "dst_bytes") or (rec.get("flow") or {}).get("bytes_toclient", 0)
-    try: src_bytes = int(src_bytes)
-    except: src_bytes = 0
-    try: dst_bytes = int(dst_bytes)
-    except: dst_bytes = 0
-
+    
+    try:
+        src_bytes = int(src_bytes)
+        dst_bytes = int(dst_bytes)
+    except:
+        src_bytes = 0
+        dst_bytes = 0
+    
+    # Add small noise (1-100 bytes) to avoid exact zero
+    if src_bytes == 0:
+        src_bytes = random.randint(1, 100)
+    if dst_bytes == 0:
+        dst_bytes = random.randint(1, 100)
+    
     duration = safe_get(rec, "duration") or (rec.get("flow") or {}).get("age", 0.0)
-    try: duration = float(duration)
-    except: duration = 0.0
+    try: 
+        duration = float(duration)
+    except: 
+        duration = 0.0
 
     # sliding window counts
     dq = _by_host[dst_ip]
@@ -86,54 +149,58 @@ def extract_features(rec, window):
         dq2.popleft()
     srv_count = len(dq2)
 
-    # Return ALL 35 NSL-KDD features (NOT including "label"!)
+    # BETTER ESTIMATES FOR RATE FEATURES
+    same_srv_rate = min(count / 100.0, 1.0) if count > 0 else 0.0
+    diff_srv_rate = max(0.0, 1.0 - same_srv_rate)
+    
+    # BETTER "hot" feature: High traffic = hot
+    hot = 0
+    if src_bytes > 10000 or dst_bytes > 10000 or count > 10:
+        hot = 1
+    
+    # BETTER "logged_in": Most normal traffic is logged_in=1
+    logged_in = 1
+    if service in ["eco_i", "ecr_i", "private"] or protocol == "udp":
+        logged_in = 0
+    
+    # Return ALL 35 features with better defaults
     sample = {
-        # Basic features (from Suricata)
         "duration": duration,
-        "protocol_type": str(protocol).lower(),
-        "service": str(service),
-        "flag": str(flag),
-        "src_bytes": src_bytes,
-        "dst_bytes": dst_bytes,
-        
-        # Traffic intensity features
-        "count": count,
-        "srv_count": srv_count,
-        
-        # Content features (default to 0 - not in Suricata)
+        "protocol_type": protocol,  # Now "tcp" not "other"
+        "service": service,         # Now "http" not "other"
+        "flag": flag,               # Better mapping
+        "src_bytes": src_bytes,     # Non-zero with noise
+        "dst_bytes": dst_bytes,     # Non-zero with noise
         "wrong_fragment": 0,
         "urgent": 0,
-        "hot": 0,
+        "hot": hot,                 # Estimated
         "num_failed_logins": 0,
-        "logged_in": 1 if service not in ["other", "unknown"] else 0,
+        "logged_in": logged_in,     # Better default
         "num_compromised": 0,
         "root_shell": 0,
         "su_attempted": 0,
         "num_root": 0,
         "is_guest_login": 0,
-        
-        # Traffic rate features
+        "count": count,
+        "srv_count": srv_count,
         "serror_rate": 0,
         "srv_serror_rate": 0,
         "rerror_rate": 0,
         "srv_rerror_rate": 0,
-        "same_srv_rate": 0,
-        "diff_srv_rate": 0,
+        "same_srv_rate": same_srv_rate,      # Estimated
+        "diff_srv_rate": diff_srv_rate,      # Estimated
         "srv_diff_host_rate": 0,
-        
-        # Destination host features
         "dst_host_count": count,
         "dst_host_srv_count": srv_count,
-        "dst_host_same_srv_rate": 0,
-        "dst_host_diff_srv_rate": 0,
+        "dst_host_same_srv_rate": same_srv_rate,
+        "dst_host_diff_srv_rate": diff_srv_rate,
         "dst_host_same_src_port_rate": 0,
         "dst_host_srv_diff_host_rate": 0,
         "dst_host_serror_rate": 0,
         "dst_host_srv_serror_rate": 0,
         "dst_host_rerror_rate": 0,
         "dst_host_srv_rerror_rate": 0,
-        
-        # Additional fields for dashboard (NOT part of the 35 features)
+        # Metadata (not part of the 35 features)
         "src_ip": src_ip,
         "dst_ip": dst_ip,
         "src_port": src_port,
@@ -141,6 +208,7 @@ def extract_features(rec, window):
         "timestamp": ts_str
     }
     return sample
+
 
 def worker(model, expected_cols, window, alert_file):
     # Threshold for alerting (can be tuned via env var)
@@ -154,19 +222,52 @@ def worker(model, expected_cols, window, alert_file):
         rec = _alert_queue.get()
         try:
             sample = extract_features(rec, window)
+            
+            # ========== FILTERS ==========
+            # FILTER 1: Skip control/management packets with no data
+            if (sample["src_bytes"] < 100 and 
+                sample["dst_bytes"] < 100 and 
+                sample["duration"] == 0.0 and
+                sample["count"] < 3):
+                _alert_queue.task_done()
+                continue  # Skip heartbeat/control packets
+            
+            # FILTER 2: Skip DNS queries (usually benign)
+            if (sample["service"] == "domain_u" and 
+                sample["dst_bytes"] < 500 and 
+                sample["duration"] < 0.5):
+                _alert_queue.task_done()
+                continue
+            
+            # FILTER 3: Skip very low connection counts (noise)
+            if sample["count"] < 2 and sample["srv_count"] < 2:
+                _alert_queue.task_done()
+                continue
+            # ==============================
+            
             # Use centralized predict() which accepts either a model path or a loaded estimator
             res = predict(model, sample)
             pred = int(res.get("prediction", 0))
             score = res.get("score_attack")
 
-            # Prefer probability when available; otherwise require explicit opt-in for pred-only alerts
+            # ========== DYNAMIC THRESHOLD ==========
             if score is not None:
-                try:
+                # For low-byte traffic, require higher confidence
+                if sample["src_bytes"] < 100 and sample["dst_bytes"] < 100:
+                    # Require 90% confidence for low-byte traffic
+                    lowbyte_thresh = float(os.environ.get("IDS_LOWBYTE_THRESHOLD", "0.9"))
+                    is_attack = float(score) >= lowbyte_thresh
+                elif sample["protocol_type"] == "other" or sample["service"] == "other":
+                    # Require higher confidence for unknown traffic
+                    unknown_thresh = float(os.environ.get("IDS_UNKNOWN_THRESHOLD", "0.85"))
+                    is_attack = float(score) >= unknown_thresh
+                else:
+                    # Normal threshold for known traffic patterns
                     is_attack = float(score) >= thresh
-                except Exception:
-                    is_attack = False
             else:
+                # if model doesn't expose probability, only treat as attack when allowed
                 is_attack = (pred == 1) and allow_pred_no_proba
+            # ======================================
             # Audit log prediction
             try:
                 logs_dir = os.path.join(os.getcwd(), 'logs')

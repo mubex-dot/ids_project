@@ -11,6 +11,7 @@ from typing import Optional
 import platform
 import subprocess
 import socket
+import random
 
 from flask import Flask, request, jsonify, Response, send_from_directory
 
@@ -62,14 +63,70 @@ def extract_features(alert: dict) -> dict:
         return default
     
     flow = find("flow", default={}) or {}
-    proto = find("proto") or flow.get("proto") or "unknown"
-    service = find("app_proto") or find("service") or "other"
-    flag = find("tcp_flags") or flow.get("tcp_flags") or "OTH"
+    raw_proto = find("proto") or flow.get("proto") or ""
+    raw_service = find("app_proto") or find("service") or ""
+    raw_flags = find("tcp_flags") or flow.get("tcp_flags") or ""
     src_bytes = int(find("tx_bytes") or find("src_bytes") or 0)
     dst_bytes = int(find("rx_bytes") or find("dst_bytes") or 0)
     duration = float(find("duration") or 0.0)
     dst_ip = alert.get("dest_ip") or alert.get("dst") or "unknown"
-
+    
+    # BETTER DEFAULT VALUES FOR CATEGORICAL FEATURES
+    
+    # Protocol: Map to "tcp", "udp", or "icmp" only
+    protocol = "tcp"  # Default to most common
+    proto_lower = raw_proto.lower()
+    if proto_lower in ["tcp", "udp", "icmp"]:
+        protocol = proto_lower
+    
+    # Service: Map to common NSL-KDD services
+    service = "http"  # Default to most common
+    
+    # Map Suricata services to NSL-KDD
+    service_map = {
+        "http": "http", "https": "http", "dns": "domain_u", "ftp": "ftp_data",
+        "ssh": "ssh", "smtp": "smtp", "tls": "ssl", "ssl": "ssl",
+        "dhcp": "dhcp", "snmp": "snmp", "telnet": "telnet"
+    }
+    
+    if raw_service in service_map:
+        service = service_map[raw_service]
+    elif raw_service and "data" in raw_service.lower():
+        service = "ftp_data"  # Generic data service
+    else:
+        # Guess by port if service unknown
+        dst_port = alert.get("dest_port") or alert.get("dp")
+        port_service_map = {
+            53: "domain_u", 21: "ftp_data", 22: "ssh", 25: "smtp",
+            80: "http", 443: "ssl", 8080: "http", 23: "telnet"
+        }
+        try:
+            dst_port_int = int(dst_port) if dst_port else 0
+            if dst_port_int in port_service_map:
+                service = port_service_map[dst_port_int]
+        except:
+            pass
+    
+    # Flag: Better TCP flag mapping
+    flag = "SF"  # Default to established connection (normal)
+    
+    if protocol == "tcp" and raw_flags:
+        flag_map = {
+            "S": "S0",      # SYN (connection attempt)
+            "SA": "SF",     # SYN-ACK (established)
+            "A": "SF",      # ACK (data transfer)
+            "FA": "RSTO",   # FIN-ACK (closing)
+            "RA": "RSTR",   # RST-ACK (reset)
+            "PA": "SH",     # PSH-ACK (urgent data)
+        }
+        flag = flag_map.get(raw_flags, "SF")
+    
+    # Add small noise to avoid exact zeros
+    if src_bytes == 0:
+        src_bytes = random.randint(1, 100)
+    if dst_bytes == 0:
+        dst_bytes = random.randint(1, 100)
+    
     # Sliding-window counts
     ts = alert.get("timestamp")
     try:
@@ -91,14 +148,28 @@ def extract_features(alert: dict) -> dict:
     while dq_srv and ts - dq_srv[0] > SLIDING_WINDOW:
         dq_srv.popleft()
     srv_count = len(dq_srv)
+    
+    # BETTER ESTIMATES FOR RATE FEATURES
+    same_srv_rate = min(count / 100.0, 1.0) if count > 0 else 0.0
+    diff_srv_rate = max(0.0, 1.0 - same_srv_rate)
+    
+    # BETTER "hot" feature: High traffic = hot
+    hot = 0
+    if src_bytes > 10000 or dst_bytes > 10000 or count > 10:
+        hot = 1
+    
+    # BETTER "logged_in": Most normal traffic is logged_in=1
+    logged_in = 1
+    if service in ["eco_i", "ecr_i", "private"] or protocol == "udp":
+        logged_in = 0
 
     # Return ALL 35 NSL-KDD features (NOT including "label"!)
     return {
         # Basic features (from Suricata)
         "duration": duration,
-        "protocol_type": str(proto).lower(),
-        "service": str(service),
-        "flag": str(flag),
+        "protocol_type": protocol,
+        "service": service,
+        "flag": flag,
         "src_bytes": src_bytes,
         "dst_bytes": dst_bytes,
         
@@ -109,9 +180,9 @@ def extract_features(alert: dict) -> dict:
         # Content features (default to 0)
         "wrong_fragment": 0,
         "urgent": 0,
-        "hot": 0,
+        "hot": hot,
         "num_failed_logins": 0,
-        "logged_in": 1 if service not in ["other", "unknown"] else 0,
+        "logged_in": logged_in,
         "num_compromised": 0,
         "root_shell": 0,
         "su_attempted": 0,
@@ -123,15 +194,15 @@ def extract_features(alert: dict) -> dict:
         "srv_serror_rate": 0,
         "rerror_rate": 0,
         "srv_rerror_rate": 0,
-        "same_srv_rate": 0,
-        "diff_srv_rate": 0,
+        "same_srv_rate": same_srv_rate,
+        "diff_srv_rate": diff_srv_rate,
         "srv_diff_host_rate": 0,
         
         # Destination host features
         "dst_host_count": count,
         "dst_host_srv_count": srv_count,
-        "dst_host_same_srv_rate": 0,
-        "dst_host_diff_srv_rate": 0,
+        "dst_host_same_srv_rate": same_srv_rate,
+        "dst_host_diff_srv_rate": diff_srv_rate,
         "dst_host_same_src_port_rate": 0,
         "dst_host_srv_diff_host_rate": 0,
         "dst_host_serror_rate": 0,
@@ -146,7 +217,7 @@ def extract_features(alert: dict) -> dict:
         "dst_port": alert.get("dest_port") or alert.get("dp"),
         "timestamp": alert.get("timestamp")
     }
-    
+
 
 def play_alert(sound_path: Optional[str] = None):
     def _play():
@@ -194,21 +265,56 @@ def ids_worker(pipeline):
         try:
             sample = extract_features(alert)
             norm = normalize_sample(sample)
+            
+            # ========== FILTERS ==========
+            # FILTER 1: Skip control/management packets with no data
+            if (sample["src_bytes"] < 100 and 
+                sample["dst_bytes"] < 100 and 
+                sample["duration"] == 0.0 and
+                sample["count"] < 3):
+                _alert_queue.task_done()
+                continue  # Skip heartbeat/control packets
+            
+            # FILTER 2: Skip DNS queries (usually benign)
+            if (sample["service"] == "domain_u" and 
+                sample["dst_bytes"] < 500 and 
+                sample["duration"] < 0.5):
+                _alert_queue.task_done()
+                continue
+            
+            # FILTER 3: Skip very low connection counts (noise)
+            if sample["count"] < 2 and sample["srv_count"] < 2:
+                _alert_queue.task_done()
+                continue
+            # ==============================
+            
             res = predict(MODEL_PATH, norm)
-            # res contains: prediction (int), score_attack (float|None), model_has_proba (bool)
             pred_val = int(res.get("prediction", 0))
             score = res.get("score_attack")
             try:
-                thresh = float(os.environ.get("IDS_ALERT_THRESHOLD", 0.5))
+                thresh = float(os.environ.get("IDS_ALERT_THRESHOLD", 0.7))
             except Exception:
-                thresh = 0.5
+                thresh = 0.7
             allow_pred_no_proba = os.environ.get("IDS_ALLOW_PRED_NO_PROBA", "0").lower() in ("1", "true", "yes")
 
+            # ========== DYNAMIC THRESHOLD ==========
             if score is not None:
-                is_attack = float(score) >= thresh
+                # For low-byte traffic, require higher confidence
+                if sample["src_bytes"] < 100 and sample["dst_bytes"] < 100:
+                    # Require 90% confidence for low-byte traffic
+                    lowbyte_thresh = float(os.environ.get("IDS_LOWBYTE_THRESHOLD", "0.9"))
+                    is_attack = float(score) >= lowbyte_thresh
+                elif sample["protocol_type"] == "other" or sample["service"] == "other":
+                    # Require higher confidence for unknown traffic
+                    unknown_thresh = float(os.environ.get("IDS_UNKNOWN_THRESHOLD", "0.85"))
+                    is_attack = float(score) >= unknown_thresh
+                else:
+                    # Normal threshold for known traffic patterns
+                    is_attack = float(score) >= thresh
             else:
                 # if model doesn't expose probability, only treat as attack when allowed
                 is_attack = (pred_val == 1) and allow_pred_no_proba
+            # ======================================
 
             if os.environ.get("IDS_DEBUG") in ("1", "true", "yes"):
                 app.logger.debug("predict result=%s thresh=%s allow_pred_no_proba=%s is_attack=%s", res, thresh, allow_pred_no_proba, is_attack)
