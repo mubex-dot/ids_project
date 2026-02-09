@@ -71,16 +71,14 @@ def extract_features(alert: dict) -> dict:
     duration = float(find("duration") or 0.0)
     dst_ip = alert.get("dest_ip") or alert.get("dst") or "unknown"
     
-    # BETTER DEFAULT VALUES FOR CATEGORICAL FEATURES
-    
     # Protocol: Map to "tcp", "udp", or "icmp" only
-    protocol = "tcp"  # Default to most common
+    protocol = "tcp"
     proto_lower = raw_proto.lower()
     if proto_lower in ["tcp", "udp", "icmp"]:
         protocol = proto_lower
     
     # Service: Map to common NSL-KDD services
-    service = "http"  # Default to most common
+    service = "http" 
     
     # Map Suricata services to NSL-KDD
     service_map = {
@@ -92,7 +90,7 @@ def extract_features(alert: dict) -> dict:
     if raw_service in service_map:
         service = service_map[raw_service]
     elif raw_service and "data" in raw_service.lower():
-        service = "ftp_data"  # Generic data service
+        service = "ftp_data" 
     else:
         # Guess by port if service unknown
         dst_port = alert.get("dest_port") or alert.get("dp")
@@ -127,7 +125,6 @@ def extract_features(alert: dict) -> dict:
     if dst_bytes == 0:
         dst_bytes = random.randint(1, 100)
     
-    # Sliding-window counts
     ts = alert.get("timestamp")
     try:
         ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() if ts else time.time()

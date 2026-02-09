@@ -5,7 +5,7 @@ from app.models import train, evaluate
 def main():
     print("[1/5] Downloading NSL-KDD dataset...")
     # NOTE: If keeps failing, download manually and add to data/raw folder
-    # download_nsl_kdd.main() 
+    download_nsl_kdd.main() 
 
     print("[2/5] Preprocessing dataset...")
     # NOTE: Tasks can either be binary or binary

@@ -19,7 +19,7 @@ MODELS = Path("models")
 def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     # Remove categorical columns that are in the dataframe
     categorical_col = [c for c in CATEGORICAL if c in X.columns]
-    # Remove label and target from numerical columns (they should already be dropped)
+    # Remove label and target from numerical columns 
     numerical_col = [c for c in X.columns if c not in categorical_col]
     
     pre = ColumnTransformer([

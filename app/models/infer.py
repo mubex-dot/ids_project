@@ -246,8 +246,8 @@ if __name__ == "__main__":
     
     from app.features.columns_nsl_kdd import COLUMNS, CATEGORICAL
     
-    # Test with a model path
-    test_model_path = "models/best_dt.joblib"
+    # Test with a model path (using dt model first)
+    test_model_path = "models/best_dt.joblib" 
     
     if os.path.exists(test_model_path):
         print("Testing inference with model:", test_model_path)

@@ -1,5 +1,3 @@
-
-
 import argparse
 import json
 import time
@@ -200,7 +198,6 @@ def extract_features(rec, window):
         "dst_host_srv_serror_rate": 0,
         "dst_host_rerror_rate": 0,
         "dst_host_srv_rerror_rate": 0,
-        # Metadata (not part of the 35 features)
         "src_ip": src_ip,
         "dst_ip": dst_ip,
         "src_port": src_port,
@@ -211,8 +208,8 @@ def extract_features(rec, window):
 
 
 
-def worker(model, expected_cols, window, alert_file):
-    # Threshold for alerting (can be tuned via env var)
+def worker(model,  window, alert_file):
+    # Threshold for alerting (can be tuned via env)
     try:
         thresh = float(os.environ.get("IDS_ALERT_THRESHOLD", 0.5))
     except Exception:
@@ -230,18 +227,17 @@ def worker(model, expected_cols, window, alert_file):
                 sample["dst_bytes"] < 100 and 
                 sample["duration"] == 0.0 and
                 sample["count"] < 3):
-                continue  # Skip heartbeat/control packets (NO task_done here!)
+                continue  
             
             # FILTER 2: Skip DNS queries (usually benign)
             if (sample["service"] == "domain_u" and 
                 sample["dst_bytes"] < 500 and 
                 sample["duration"] < 0.5):
-                continue  # Skip benign DNS (NO task_done here!)
+                continue  
             
             # FILTER 3: Skip very low connection counts (noise)
             if sample["count"] < 2 and sample["srv_count"] < 2:
-                continue  # Skip noise (NO task_done here!)
-            # ==============================
+                continue 
             
             # Use centralized predict() which accepts either a model path or a loaded estimator
             res = predict(model, sample)
@@ -265,7 +261,6 @@ def worker(model, expected_cols, window, alert_file):
             else:
                 # if model doesn't expose probability, only treat as attack when allowed
                 is_attack = (pred == 1) and allow_pred_no_proba
-            # ======================================
             
             # Audit log prediction
             try:
@@ -292,7 +287,7 @@ def worker(model, expected_cols, window, alert_file):
         except Exception:
             import traceback; traceback.print_exc()
         finally:
-            _alert_queue.task_done()  # ONLY HERE, not in the filters!
+            _alert_queue.task_done()  
 
 
 def tail_f(path):
