@@ -29,7 +29,7 @@ def add_targets(df: pd.DataFrame, task: str) -> pd.DataFrame:
         cat_order = sorted(families.unique())
         to_int = {c: i for i, c in enumerate(cat_order)}
         df["target"] = families.map(to_int)
-        # Save a tiny label map for later use
+        # Save a tiny label map 
         (INTERIM / "label_map_multiclass.json").write_text(pd.Series({int(v): k for k, v in to_int.items()}).to_json())
     else:
         raise ValueError("task must be 'binary' or 'multiclass'")

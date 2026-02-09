@@ -14,6 +14,9 @@ COLUMNS = [
 ]
 
 CATEGORICAL = ["protocol_type", "service", "flag"]
+EXPECTED_FEATURES = [
+    'protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes'
+]
 LABEL_COL = "label"
 DIFFICULTY_COL = "difficulty"
 

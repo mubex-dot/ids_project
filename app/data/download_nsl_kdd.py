@@ -4,8 +4,8 @@ import time
 import requests
 import pandas as pd
 
-# keep your existing imports for COLUMNS (and ensure_dir if you already have it)
 from app.features.columns_nsl_kdd import COLUMNS
+
 try:
     from app.utils.io import ensure_dir
 except Exception:

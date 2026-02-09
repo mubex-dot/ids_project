@@ -17,8 +17,11 @@ INTERIM = Path("data/interim")
 MODELS = Path("models")
 
 def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
+    # Remove categorical columns that are in the dataframe
     categorical_col = [c for c in CATEGORICAL if c in X.columns]
-    numerical_col = [c for c in X.columns if c not in categorical_col + ["label", "target"]] # All columns except categorical + label and added target columns
+    # Remove label and target from numerical columns 
+    numerical_col = [c for c in X.columns if c not in categorical_col]
+    
     pre = ColumnTransformer([
         ("categorical_col", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_col),
         ("numerical_col", StandardScaler(), numerical_col),
@@ -60,7 +63,7 @@ def main(task, models, fast):
     df = pd.read_csv(INTERIM / f"train_{task}.csv")
     if fast and len(df) > 40000:
         df = df.sample(40000, random_state=42)
-    X = df.drop(columns=["target"])
+    X = df.drop(columns=["target", "label"])
     y = df["target"].values
     pre = build_preprocessor(X)
     for name in models:

@@ -35,7 +35,7 @@ def plot_confusion(cm, labels, outpath):
 def main(task, model):
     ensure_dir(REPORTS)
     df_te = pd.read_csv(INTERIM / f"test_{task}.csv")
-    X_te = df_te.drop(columns=["target"])
+    X_te = df_te.drop(columns=["target", "label"])
     y_te = df_te["target"].to_numpy()
     model_names = ([model] if model != "both" else ["svm","dt"])
     for name in model_names:
