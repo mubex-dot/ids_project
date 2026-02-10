@@ -338,7 +338,8 @@ def main():
 
     # start workers
     for _ in range(args.threads):
-        t = threading.Thread(target=worker, args=(pipeline, expected_cols, args.window, args.alert_file), daemon=True)
+        t = threading.Thread(target=worker, args=(pipeline, args.window, args.alert_file), daemon=True)
+
         t.start()
 
     print(f"[+] Monitoring {args.eve} (window={args.window}s) - press Ctrl+C to stop")
