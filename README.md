@@ -199,8 +199,7 @@ python3 models/infer.py --model models/best_svm.joblib --input processed/suricat
 
 - [main.py](main.py) — orchestration entrypoint
 - [app/helpers/ids_suricata.py](app/helpers/ids_suricata.py) — Suricata ingestion and live prediction helper
-- [models/infer.py](models/infer.py) — inference runtime
-- [models/infer.py](models/infer.py) — inference runtime
+- [app/models/infer.py](app/models/infer.py) — inference runtime
 - [app/data/make_dataset.py](app/data/make_dataset.py) — dataset preprocessing (label handling)
 
 ## Contact / contribution
