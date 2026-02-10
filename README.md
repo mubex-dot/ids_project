@@ -92,8 +92,8 @@ On the host/attacker VM (must be able to reach the victim's IP):
 Use standard traffic-generation tools; the repo's demo scripts are optional and may be deleted. Common options:
 
 ```bash
-# Replay a PCAP to the victim IP using tcpreplay
-sudo tcpreplay --intf1=<iface> sample_attack.pcap
+# Perform an nmap scan
+sudo nmap -A <victim_ip>
 
 # Or generate traffic via scapy (Python) or use hping3
 python3 - <<'PY'
@@ -129,7 +129,7 @@ Two quick options to classify alerts:
 Direct inference call (example):
 
 ```bash
-python app/models/infer.py --logfile ids_alerts.jsonl --output results.json --verbose
+python3 app/models/infer.py --logfile ids_alerts.jsonl --model models/<ids-model> --output results.json --verbose
 ```
 
 The `reports/alerts_predicted.csv` (or similar) will include predicted classes/labels for each converted alert.
@@ -192,7 +192,7 @@ sudo tcpreplay --intf1=<iface> sample_attack.pcap
 python3 app/helpers/ids_suricata.py --eve /var/log/suricata/eve.json --model models/best_svm.joblib
 
 # Run inference on a prepared CSV/JSON
-python app/models/infer.py --logfile ids_alerts.jsonl --output results.json --verbose
+python3 app/models/infer.py --logfile ids_alerts.jsonl --model models/<ids-model> --output results.json --verbose
 ```
 
 ## Files of interest
