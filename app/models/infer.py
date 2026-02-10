@@ -1,8 +1,12 @@
 from joblib import load
 import pandas as pd
 import os
+import json
+import sys
 import logging
 from typing import List, Dict, Any, Union
+from datetime import datetime
+import argparse
 
 try:
     # Local feature definitions
@@ -13,24 +17,87 @@ except ImportError:
     NSL_CATEGORICAL = ['protocol_type', 'service', 'flag']
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# List of NSL-KDD features (41 features) - exclude label and difficulty
+NSL_FEATURES = [
+    'duration', 'protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes',
+    'land', 'wrong_fragment', 'urgent', 'hot', 'num_failed_logins',
+    'logged_in', 'num_compromised', 'root_shell', 'su_attempted', 'num_root',
+    'num_file_creations', 'num_shells', 'num_access_files', 'num_outbound_cmds',
+    'is_host_login', 'is_guest_login', 'count', 'srv_count', 'serror_rate',
+    'srv_serror_rate', 'rerror_rate', 'srv_rerror_rate', 'same_srv_rate',
+    'diff_srv_rate', 'srv_diff_host_rate', 'dst_host_count', 'dst_host_srv_count',
+    'dst_host_same_srv_rate', 'dst_host_diff_srv_rate', 'dst_host_same_src_port_rate',
+    'dst_host_srv_diff_host_rate', 'dst_host_serror_rate', 'dst_host_srv_serror_rate',
+    'dst_host_rerror_rate', 'dst_host_srv_rerror_rate'
+]
+
+
+def extract_nsl_features(log_entry: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract only NSL-KDD features from logged traffic.
+    Removes metadata like IPs, ports, timestamps.
+    """
+    features = {}
+    
+    for feature in NSL_FEATURES:
+        if feature in log_entry:
+            features[feature] = log_entry[feature]
+        else:
+            # Set defaults for missing features
+            if feature in NSL_CATEGORICAL:
+                features[feature] = 'other'
+            else:
+                features[feature] = 0
+    
+    return features
+
+
+def validate_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate and normalize a sample dictionary.
+    """
+    normalized = extract_nsl_features(sample)
+    
+    # Ensure categorical features have valid values
+    for cat in NSL_CATEGORICAL:
+        if cat in normalized and normalized[cat] is None:
+            normalized[cat] = "other"
+    
+    # Convert numeric features to proper types
+    for key, value in normalized.items():
+        if key not in NSL_CATEGORICAL:
+            try:
+                normalized[key] = float(value)
+            except (ValueError, TypeError):
+                normalized[key] = 0.0
+    
+    return normalized
 
 
 def predict(model: Union[str, object], sample_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
     Predict on a single sample dictionary.
-    
-    Args:
-        model: Path to model file or loaded model object
-        sample_dict: Dictionary with feature values
-        
-    Returns:
-        Dictionary with prediction and score:
-        {
-            "prediction": 0 (normal) or 1 (attack),
-            "score_attack": float (probability of attack if available)
-        }
     """
+    # Extract metadata from input
+    metadata = {
+        'timestamp': sample_dict.get('timestamp', datetime.now().isoformat()),
+        'src_ip': sample_dict.get('src_ip', ''),
+        'dst_ip': sample_dict.get('dst_ip', ''),
+        'src_port': sample_dict.get('src_port', 0),
+        'dst_port': sample_dict.get('dst_port', 0),
+        'original_pred': sample_dict.get('pred', ''),
+        'original_score': sample_dict.get('score_attack', 0)
+    }
+    
+    # Validate and extract NSL features
+    nsl_features = validate_sample(sample_dict)
+    
     # Load model if path is provided
     if isinstance(model, (str, bytes, os.PathLike)):
         try:
@@ -41,252 +108,402 @@ def predict(model: Union[str, object], sample_dict: Dict[str, Any]) -> Dict[str,
     else:
         # Assume it's already a loaded estimator
         clf = model
-
-    # Ensure required categorical features exist
-    for k in NSL_CATEGORICAL:
-        sample_dict.setdefault(k, "other")
-
-    # Try to infer expected input columns from the pipeline
-    expected_cols: List[str] = []
-    try:
-        if hasattr(clf, 'named_steps'):
-            for name, step in clf.named_steps.items():
-                # ColumnTransformer stores transformers_ with (name, transformer, columns)
-                if hasattr(step, 'transformers_'):
-                    for _, _, cols in step.transformers_:
-                        if isinstance(cols, (list, tuple)):
-                            expected_cols.extend(cols)
-                    break
-    except Exception as e:
-        logger.debug("Could not infer columns from pipeline: %s", e)
-
-    # Fallback to known NSL columns if pipeline introspection failed
-    if not expected_cols:
-        expected_cols = [col for col in NSL_COLUMNS if col not in ['label', 'difficulty']]
-
-    # Build a sanitized row containing all expected columns with safe defaults
-    row = {}
-    for col in expected_cols:
-        if col in sample_dict:
-            row[col] = sample_dict[col]
-        else:
-            # Categorical defaults
-            if col in NSL_CATEGORICAL:
-                row[col] = 'other'
-            else:
-                # Numeric default
-                row[col] = 0
-
-    # Create DataFrame
-    df = pd.DataFrame([row])
     
-    # Ensure numeric columns have numeric dtype and NaNs filled
-    for col in df.columns:
-        if df[col].dtype.kind in "biufc":  # Bool, int, uint, float, complex
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    # Optional debug logging
-    if os.environ.get("IDS_DEBUG") in ("1", "true", "yes"):
-        logger.info("[infer] Model type: %s", type(clf))
-        
-        try:
-            if hasattr(clf, "named_steps"):
-                logger.info("[infer] Pipeline steps: %s", list(clf.named_steps.keys()))
-        except Exception:
-            pass
-        
-        try:
-            if hasattr(clf, "feature_names_in_"):
-                logger.info("[infer] Expected features: %s", clf.feature_names_in_)
-        except Exception:
-            pass
-        
-        logger.info("[infer] Input features: %s", list(row.keys()))
-        logger.info("[infer] Missing features: %s", 
-                   [col for col in expected_cols if col not in sample_dict])
-        logger.info("[infer] DataFrame shape: %s", df.shape)
-        logger.info("[infer] Sample values: %s", row)
-
+    # Create DataFrame from NSL features
+    df = pd.DataFrame([nsl_features])
+    
     # Make prediction
     try:
         prediction = int(clf.predict(df)[0])
-    except ValueError as e:
-        # If columns are still missing, attempt to add defaults and retry
-        missing_msg = str(e)
-        logger.error("Prediction failed due to columns: %s", missing_msg)
-        
-        # Add any missing NSL columns and retry
-        missing_cols = [col for col in NSL_COLUMNS 
-                       if col not in df.columns and col not in ['label', 'difficulty']]
-        if missing_cols:
-            for col in missing_cols:
-                df[col] = 0
-            try:
-                prediction = int(clf.predict(df)[0])
-            except Exception as retry_error:
-                logger.exception("Prediction retry failed")
-                raise retry_error
-        else:
-            raise
-
-    # Prepare output
-    result = {"prediction": prediction}
-
+    except Exception as e:
+        logger.error("Prediction failed: %s", e)
+        raise
+    
+    # Prepare result with metadata
+    result = {
+        "prediction": prediction,
+        "is_attack": prediction == 1,
+        "timestamp": metadata['timestamp'],
+        "src_ip": metadata['src_ip'],
+        "dst_ip": metadata['dst_ip'],
+        "src_port": metadata['src_port'],
+        "dst_port": metadata['dst_port'],
+        "protocol": nsl_features.get('protocol_type', ''),
+        "service": nsl_features.get('service', ''),
+        "original_pred": metadata['original_pred'],
+        "original_score": metadata['original_score']
+    }
+    
     # Get probability if available
     if hasattr(clf, "predict_proba"):
         try:
             proba = clf.predict_proba(df)
             if proba.ndim == 2 and proba.shape[1] >= 2:
-                # Class 0 = normal, Class 1 = attack
-                # Note: In binary classification, we expect 2 classes
-                if proba.shape[1] == 2:
-                    # Binary classification
-                    result["score_attack"] = float(proba[0, 1])
-                else:
-                    # Multiclass - probability of positive class
-                    result["score_attack"] = float(proba[0, -1])
-            elif proba.ndim == 2 and proba.shape[1] == 1:
-                # Some models might output single class probability
-                result["score_attack"] = float(proba[0, 0])
+                result["score_attack"] = float(proba[0, 1])
+            else:
+                result["score_attack"] = 0.5
         except Exception as e:
             logger.warning("predict_proba failed: %s", e)
-    elif hasattr(clf, "decision_function"):
-        try:
-            decision = clf.decision_function(df)
-            # Normalize decision scores to [0, 1] for consistency
-            if decision.ndim == 1:
-                # Binary classification
-                from scipy.special import expit
-                result["score_attack"] = float(expit(decision[0]))
-            else:
-                # Multiclass - use max probability
-                from scipy.special import softmax
-                probabilities = softmax(decision[0])
-                result["score_attack"] = float(probabilities[-1])
-        except Exception as e:
-            logger.warning("decision_function failed: %s", e)
-
-    # Debug log the result
-    if os.environ.get("IDS_DEBUG") in ("1", "true", "yes"):
-        logger.info("[infer] Prediction: %s", result)
-
+            result["score_attack"] = 0.5
+    else:
+        result["score_attack"] = 0.5
+    
     return result
 
 
 def batch_predict(model: Union[str, object], samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Predict on multiple samples.
-    
-    Args:
-        model: Path to model file or loaded model object
-        samples: List of dictionaries with feature values
-        
-    Returns:
-        List of prediction results
     """
     results = []
-    for sample in samples:
+    for i, sample in enumerate(samples):
         try:
             result = predict(model, sample)
             results.append(result)
+            
+            # Log attacks in real-time
+            if result['is_attack']:
+                logger.warning(
+                    "🚨 Attack detected: %s:%s -> %s:%s (confidence: %.2f%%)",
+                    result['src_ip'], result['src_port'],
+                    result['dst_ip'], result['dst_port'],
+                    result.get('score_attack', 0) * 100
+                )
+                
         except Exception as e:
-            logger.error("Failed to predict sample %s: %s", sample, e)
-            results.append({"error": str(e)})
+            logger.error("Failed to predict sample %d: %s", i, e)
+            results.append({
+                "error": str(e),
+                "timestamp": sample.get('timestamp', datetime.now().isoformat()),
+                "src_ip": sample.get('src_ip', ''),
+                "dst_ip": sample.get('dst_ip', '')
+            })
     return results
 
 
-def validate_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+def load_logfile(logfile_path: str) -> List[Dict[str, Any]]:
     """
-    Validate and normalize a sample dictionary.
+    Load log entries from a file.
+    Supports:
+    - JSON array file: [ {...}, {...} ]
+    - NDJSON file: {}\n{}\n
+    - JSON lines: same as NDJSON
+    """
+    samples = []
     
-    Args:
-        sample: Input sample dictionary
+    try:
+        with open(logfile_path, 'r') as f:
+            content = f.read().strip()
+            
+            if not content:
+                logger.error("Logfile is empty: %s", logfile_path)
+                return []
+            
+            # Try to parse as JSON array
+            if content.startswith('['):
+                data = json.loads(content)
+                if isinstance(data, list):
+                    samples = data
+                else:
+                    samples = [data]
+            else:
+                # Parse as NDJSON (newline-delimited JSON)
+                samples = []
+                for line_num, line in enumerate(content.split('\n'), 1):
+                    line = line.strip()
+                    if line:
+                        try:
+                            entry = json.loads(line)
+                            samples.append(entry)
+                        except json.JSONDecodeError as e:
+                            logger.error("Invalid JSON at line %d: %s", line_num, e)
+                            continue
         
-    Returns:
-        Normalized sample with all required features
+        logger.info("Loaded %d log entries from %s", len(samples), logfile_path)
+        return samples
+        
+    except Exception as e:
+        logger.error("Failed to load logfile %s: %s", logfile_path, e)
+        return []
+
+
+def detect_attacks_from_logfile(model_path: str, logfile_path: str, 
+                               output_file: str = None, 
+                               verbose: bool = False) -> Dict[str, Any]:
     """
-    normalized = sample.copy()
+    Detect attacks from a logfile and return statistics.
+    """
+    logger.info("🔍 Starting attack detection from: %s", logfile_path)
+    logger.info("📦 Using model: %s", model_path)
     
-    # Ensure categorical features exist
-    for cat in NSL_CATEGORICAL:
-        if cat not in normalized:
-            normalized[cat] = "other"
+    # Check if model exists
+    if not os.path.exists(model_path):
+        logger.error("Model file not found: %s", model_path)
+        return {"error": "Model file not found"}
     
-    # Ensure required numeric features exist
-    required_numeric = [
-        'duration', 'src_bytes', 'dst_bytes', 'wrong_fragment', 'urgent', 'hot',
-        'num_failed_logins', 'logged_in', 'num_compromised', 'root_shell',
-        'su_attempted', 'num_root', 'is_guest_login', 'count', 'srv_count',
-        'serror_rate', 'srv_serror_rate', 'rerror_rate', 'srv_rerror_rate',
-        'same_srv_rate', 'diff_srv_rate', 'srv_diff_host_rate',
-        'dst_host_count', 'dst_host_srv_count', 'dst_host_same_srv_rate',
-        'dst_host_diff_srv_rate', 'dst_host_same_src_port_rate',
-        'dst_host_srv_diff_host_rate', 'dst_host_serror_rate',
-        'dst_host_srv_serror_rate', 'dst_host_rerror_rate',
-        'dst_host_srv_rerror_rate'
-    ]
+    # Check if logfile exists
+    if not os.path.exists(logfile_path):
+        logger.error("Logfile not found: %s", logfile_path)
+        return {"error": "Logfile not found"}
     
-    for num in required_numeric:
-        if num not in normalized:
-            normalized[num] = 0
-        else:
-            # Convert to numeric
+    # Load log entries
+    samples = load_logfile(logfile_path)
+    if not samples:
+        logger.error("No valid log entries found in %s", logfile_path)
+        return {"error": "No valid log entries"}
+    
+    # Load model
+    try:
+        model = load(model_path)
+        logger.info("✅ Model loaded successfully")
+    except Exception as e:
+        logger.error("Failed to load model: %s", e)
+        return {"error": f"Model load failed: {e}"}
+    
+    # Make predictions
+    results = batch_predict(model, samples)
+    
+    # Calculate statistics
+    total_samples = len(results)
+    successful = sum(1 for r in results if 'error' not in r)
+    attacks = sum(1 for r in results if r.get('is_attack', False))
+    
+    # Prepare summary
+    summary = {
+        "logfile": logfile_path,
+        "model": model_path,
+        "total_entries": total_samples,
+        "successfully_processed": successful,
+        "attacks_detected": attacks,
+        "attack_percentage": (attacks / successful * 100) if successful > 0 else 0,
+        "normal_traffic": successful - attacks,
+        "processing_time": datetime.now().isoformat(),
+        "detailed_results": results if verbose else []
+    }
+    
+    # Save results if output file specified
+    if output_file:
+        try:
+            output_dir = os.path.dirname(output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            
+            with open(output_file, 'w') as f:
+                json.dump({
+                    "summary": summary,
+                    "detections": results
+                }, f, indent=2)
+            
+            logger.info("💾 Results saved to: %s", output_file)
+            summary["output_file"] = output_file
+        except Exception as e:
+            logger.error("Failed to save results: %s", e)
+    
+    # Print summary
+    print("\n" + "="*60)
+    print("📊 ATTACK DETECTION SUMMARY")
+    print("="*60)
+    print(f"Logfile:         {logfile_path}")
+    print(f"Model:           {model_path}")
+    print(f"Total entries:   {total_samples}")
+    print(f"Processed:       {successful}")
+    print(f"Attacks detected: {attacks} ({attacks/successful*100:.1f}%)")
+    print(f"Normal traffic:  {successful - attacks}")
+    
+    if attacks > 0:
+        print(f"\n🚨 DETECTED ATTACKS:")
+        for i, result in enumerate(results):
+            if result.get('is_attack'):
+                print(f"  {i+1}. {result['timestamp']}")
+                print(f"     From: {result['src_ip']}:{result['src_port']}")
+                print(f"     To:   {result['dst_ip']}:{result['dst_port']}")
+                print(f"     Service: {result['protocol']}/{result['service']}")
+                print(f"     Confidence: {result.get('score_attack', 0):.1%}")
+                if result.get('original_pred'):
+                    print(f"     Original system: {result['original_pred']}")
+                print()
+    
+    print("="*60)
+    
+    return summary
+
+
+def realtime_detection(model_path: str):
+    """
+    Real-time attack detection from stdin.
+    """
+    logger.info("🔍 Starting real-time attack detection")
+    logger.info("📦 Using model: %s", model_path)
+    
+    try:
+        model = load(model_path)
+        logger.info("✅ Model loaded successfully")
+    except Exception as e:
+        logger.error("Failed to load model: %s", e)
+        return
+    
+    print("\n🔄 Ready for real-time detection. Enter log entries (one per line):")
+    print("   Press Ctrl+C to exit")
+    print("-" * 50)
+    
+    try:
+        line_num = 0
+        attack_count = 0
+        
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            
+            line_num += 1
+            
             try:
-                normalized[num] = float(normalized[num])
-            except (ValueError, TypeError):
-                normalized[num] = 0
+                log_entry = json.loads(line)
+                result = predict(model, log_entry)
+                
+                # Display result
+                if result['is_attack']:
+                    attack_count += 1
+                    print(f"\n🚨 ATTACK DETECTED #{attack_count}")
+                    print(f"   Entry: {line_num}")
+                    print(f"   Time:  {result['timestamp']}")
+                    print(f"   From:  {result['src_ip']}:{result['src_port']}")
+                    print(f"   To:    {result['dst_ip']}:{result['dst_port']}")
+                    print(f"   Type:  {result['protocol']}/{result['service']}")
+                    print(f"   Confidence: {result.get('score_attack', 0):.1%}")
+                    if result.get('original_pred'):
+                        print(f"   Original: {result['original_pred']}")
+                    print("-" * 50)
+                else:
+                    if line_num % 10 == 0:  # Show progress every 10 entries
+                        print(f"✓ Processed {line_num} entries, {attack_count} attacks")
+                
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON at line %d", line_num)
+            except Exception as e:
+                logger.error("Error at line %d: %s", line_num, e)
     
-    return normalized
+    except KeyboardInterrupt:
+        print(f"\n\n⏹️  Detection stopped")
+        print(f"   Total entries: {line_num}")
+        print(f"   Total attacks: {attack_count}")
 
 
-if __name__ == "__main__":
-    import sys
+def main():
+    parser = argparse.ArgumentParser(
+        description="Intrusion Detection System - Attack Detection from Logfiles",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --logfile traffic.json --output results.json
+  %(prog)s --logfile attacks.ndjson --model models/best_svm.joblib --verbose
+  cat live_traffic.json | %(prog)s --realtime
+  %(prog)s --test (quick test with built-in sample)
+        """
+    )
     
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    parser.add_argument(
+        "--logfile", "-l",
+        help="Path to logfile (JSON array or NDJSON format)"
+    )
     
-    from app.features.columns_nsl_kdd import COLUMNS, CATEGORICAL
+    parser.add_argument(
+        "--model", "-m",
+        default="models/best_dt.joblib",
+        help="Path to trained model (default: models/best_dt.joblib)"
+    )
     
-    # Test with a model path (using dt model first)
-    test_model_path = "models/best_dt.joblib" 
+    parser.add_argument(
+        "--output", "-o",
+        help="Output file for detection results (JSON format)"
+    )
     
-    if os.path.exists(test_model_path):
-        print("Testing inference with model:", test_model_path)
-        
-        # Create a test sample
-        test_sample = {
-            "duration": 0.1,
+    parser.add_argument(
+        "--realtime", "-r",
+        action="store_true",
+        help="Real-time mode (read from stdin)"
+    )
+    
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Verbose output with all results"
+    )
+    
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Test with a built-in sample log entry"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.realtime:
+        realtime_detection(args.model)
+    
+    elif args.logfile:
+        detect_attacks_from_logfile(
+            model_path=args.model,
+            logfile_path=args.logfile,
+            output_file=args.output,
+            verbose=args.verbose
+        )
+    
+    elif args.test:
+        # Test with a sample
+        sample = {
+            "duration": 0.0,
             "protocol_type": "tcp",
-            "service": "http",
+            "service": "ftp",
             "flag": "SF",
             "src_bytes": 100,
             "dst_bytes": 2000,
-            "count": 1,
-            "srv_count": 1
+            "wrong_fragment": 0,
+            "urgent": 0,
+            "hot": 0,
+            "num_failed_logins": 0,
+            "logged_in": 1,
+            "num_compromised": 0,
+            "root_shell": 0,
+            "su_attempted": 0,
+            "num_root": 0,
+            "is_guest_login": 0,
+            "count": 2,
+            "srv_count": 2,
+            "serror_rate": 0,
+            "srv_serror_rate": 0,
+            "rerror_rate": 0,
+            "srv_rerror_rate": 0,
+            "same_srv_rate": 1.0,
+            "diff_srv_rate": 0.0,
+            "srv_diff_host_rate": 0.0,
+            "dst_host_count": 150,
+            "dst_host_srv_count": 25,
+            "dst_host_same_srv_rate": 0.17,
+            "dst_host_diff_srv_rate": 0.03,
+            "dst_host_same_src_port_rate": 0.17,
+            "dst_host_srv_diff_host_rate": 0.0,
+            "dst_host_serror_rate": 0.0,
+            "dst_host_srv_serror_rate": 0.0,
+            "dst_host_rerror_rate": 0.0,
+            "dst_host_srv_rerror_rate": 0.0,
+            "src_ip": "192.168.1.100",
+            "dst_ip": "10.0.0.1",
+            "src_port": 12345,
+            "dst_port": 21,
+            "timestamp": "2024-01-01T12:00:00Z"
         }
         
-        # Fill missing features
-        test_sample = validate_sample(test_sample)
+        print("🧪 Testing with sample log entry...\n")
+        result = predict(args.model, sample)
         
-        print("Test sample features:", len(test_sample))
-        print("Required features:", len([c for c in COLUMNS if c not in ['label', 'difficulty']]))
-        
-        # Make prediction
-        result = predict(test_model_path, test_sample)
-        print("Prediction result:", result)
-        
-        # Test with attack-like traffic
-        test_sample_attack = test_sample.copy()
-        test_sample_attack.update({
-            "src_bytes": 1000000,
-            "dst_bytes": 50,
-            "count": 100,
-            "srv_count": 100,
-            "hot": 10,
-            "num_failed_logins": 5
-        })
-        
-        result_attack = predict(test_model_path, test_sample_attack)
-        print("Attack prediction result:", result_attack)
+        print("📊 Sample Result:")
+        for key, value in result.items():
+            print(f"  {key}: {value}")
+    
     else:
-        print(f"Model not found at {test_model_path}")
-        print("Run main.py to train a model first.")
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

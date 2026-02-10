@@ -26,4 +26,5 @@ assets/
 *.log
 *.tmp
 *.bak
-ids_alerts.jsonl
+ids_alerts.json
+results.json

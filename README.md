@@ -129,7 +129,7 @@ Two quick options to classify alerts:
 Direct inference call (example):
 
 ```bash
-python3 app/models/infer.py --model models/best_svm.joblib --input processed/suricata_for_predict.csv --output reports/alerts_predicted.csv
+python app/models/infer.py --logfile ids_alerts.jsonl --output results.json --verbose
 ```
 
 The `reports/alerts_predicted.csv` (or similar) will include predicted classes/labels for each converted alert.
@@ -192,7 +192,7 @@ sudo tcpreplay --intf1=<iface> sample_attack.pcap
 python3 app/helpers/ids_suricata.py --eve /var/log/suricata/eve.json --model models/best_svm.joblib
 
 # Run inference on a prepared CSV/JSON
-python3 app/models/infer.py --model models/best_svm.joblib --input processed/suricata_for_predict.csv --output reports/alerts_predicted.csv
+python app/models/infer.py --logfile ids_alerts.jsonl --output results.json --verbose
 ```
 
 ## Files of interest
